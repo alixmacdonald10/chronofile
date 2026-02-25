@@ -1,0 +1,20 @@
+name: SecurityAudit
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Runs at 6 AM UTC every day
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Cargo Audit
+      run: cargo install cargo-audit
+    - name: Run audit
+      run: cargo audit
