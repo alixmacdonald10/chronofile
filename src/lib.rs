@@ -23,10 +23,7 @@
 //! - Keep file open for the duration of operations.
 
 use std::{
-    fs::{File, FileTimes, Metadata, OpenOptions, Permissions},
-    io,
-    path::Path,
-    time::SystemTime,
+    fmt, fs::{File, FileTimes, Metadata, OpenOptions, Permissions}, io, path::Path, time::SystemTime
 };
 
 pub struct ChronoFile {
@@ -266,6 +263,12 @@ impl ChronoFile {
 impl From<File> for ChronoFile {
     fn from(value: File) -> Self {
         ChronoFile { inner: value }
+    }
+}
+
+impl fmt::Debug for ChronoFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
     }
 }
 
