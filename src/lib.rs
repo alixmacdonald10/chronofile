@@ -9,13 +9,9 @@ pub struct ChronoFile {
 }
 
 impl ChronoFile {
-    /// Attempts to open a file in read-only mode which can be Copy-On-Write.
+    /// Attempts to open a chronologically versioned File in read-only mode.
     ///
-    /// See the [`OpenOptions::open`] method for more details.
-    ///
-    /// If you only need to read the entire file contents,
-    /// consider [`std::fs::read()`][self::read] or
-    /// [`std::fs::read_to_string()`][self::read_to_string] instead.
+    /// This method defers to [std::fs::File] open method, for further information look there.
     ///
     /// # Errors
     ///
@@ -25,8 +21,9 @@ impl ChronoFile {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::File;
     /// use std::io::Read;
+    ///
+    /// use chronofile::ChronoFile;
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let mut f = ChronoFile::open("foo.txt")?;
@@ -36,12 +33,14 @@ impl ChronoFile {
     /// }
     /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<ChronoFile> {
+        // TODO: Check if chronoversioned else create that
+
         Ok(ChronoFile {
             inner: OpenOptions::new().read(true).open(path.as_ref())?,
         })
     }
 
-    /// Opens a file in write-only mode.
+    /// Opens a chronologically versioned file in write-only mode.
     ///
     /// This function will create a file if it does not exist,
     /// and will truncate it if it does.
@@ -56,8 +55,9 @@ impl ChronoFile {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::File;
     /// use std::io::Write;
+    ///
+    /// use chronofile::ChronoFile;
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let mut f = ChronoFile::create("foo.txt")?;
@@ -66,6 +66,8 @@ impl ChronoFile {
     /// }
     /// ```
     pub fn create<P: AsRef<Path>>(path: P) -> io::Result<ChronoFile> {
+        // TODO: if exists it truncates it so handle this with the chrono
+
         Ok(ChronoFile {
             inner: OpenOptions::new()
                 .write(true)
@@ -111,7 +113,7 @@ mod tests {
         file_path.push("create-test.txt");
 
         {
-            let file = File::create(&file_path).unwrap();
+            let _file = File::create(&file_path).unwrap();
         }
         let file_stamp = ChronoFile::open(file_path);
         assert!(file_stamp.is_ok());

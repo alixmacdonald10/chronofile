@@ -1,6 +1,6 @@
 # ChronoFile 
 
-**Chronofile** is a simple Rust crate that provides a **Copy-On-Write (COW)** mechanism for safely appending data to files while preserving previous versions. With each modification, it creates a new copy of the file, ensuring your original data remains intact.
+**Chronofile** is a simple Rust crate that provides chronologically versioned files. A **Copy-On-Write (COW)** mechanism is used to safely append data to files while preserving previous versions. With each modification, it creates a new copy of the file, ensuring your original data remains intact.
 
 ### Features:
 - Append data to files without modifying the original.
