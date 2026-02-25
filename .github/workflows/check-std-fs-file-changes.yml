@@ -3,6 +3,12 @@ name: Check rust-lang/rust std::fs changes
 on:
   schedule:
     - cron: "0 6 * * *" # Runs at 6 AM UTC every day
+  workflow_dispatch:
+    branches: [ "*" ]
+
+permissions:
+  issues: write
+  contents: read
 
 jobs:
   check-file:
@@ -13,7 +19,7 @@ jobs:
         with:
           repository: rust-lang/rust
           path: rust
-          fetch-depth: 0 # Fetch all history
+          fetch-depth: 1
 
       - name: Check for fs.rs changes
         id: check
@@ -21,7 +27,7 @@ jobs:
           cd rust
 
           # Get short commit hashes of any changes
-          HASHES=$(git log --since="yesterday 05:59" --format="%h" -- ./src/lib.rs)
+          HASHES=$(git log --since="yesterday 05:59" --format="%h" -- ./library/std/src/fs.rs)
           if [ -z "$HASHES" ]; then
             echo "no changes made!"
             echo "file_changed=false" >> $GITHUB_OUTPUT
@@ -38,6 +44,8 @@ jobs:
             } >> $GITHUB_OUTPUT
           fi
 
+      - name: Checkout this repository
+        uses: actions/checkout@v4
       - name: Create issue for changes
         if: steps.check.outputs.file_changed == 'true'
         uses: JasonEtco/create-an-issue@v2

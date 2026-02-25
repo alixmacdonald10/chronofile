@@ -3,18 +3,38 @@ name: SecurityAudit
 on:
   schedule:
     - cron: "0 6 * * *" # Runs at 6 AM UTC every day
+  workflow_dispatch:
+    branches: ["*"]
+
+permissions:
+  issues: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  security:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install Cargo Audit
-      run: cargo install cargo-audit
-    - name: Run audit
-      run: cargo audit
+      - uses: actions/checkout@v4
+
+      - name: Install Cargo Audit
+        run: cargo install cargo-audit
+
+      - name: Run audit
+        id: audit
+        continue-on-error: true
+        run: cargo audit
+
+      - name: Create issue for security vulnerabilities
+        if: steps.audit.outcome == 'failure'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/dependency-issues.md
+          update_existing: false
