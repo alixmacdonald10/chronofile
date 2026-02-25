@@ -23,7 +23,11 @@
 //! - Keep file open for the duration of operations.
 
 use std::{
-    fmt, fs::{File, FileTimes, Metadata, OpenOptions, Permissions}, io, path::Path, time::SystemTime
+    fmt,
+    fs::{File, FileTimes, Metadata, OpenOptions, Permissions},
+    io::{self, IoSliceMut, Read},
+    path::Path,
+    time::SystemTime,
 };
 
 pub struct ChronoFile {
@@ -272,15 +276,35 @@ impl fmt::Debug for ChronoFile {
     }
 }
 
+impl Read for ChronoFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        (self).inner.read(buf)
+    }
+    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        self.inner.read_vectored(bufs)
+    }
+
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+        self.inner.read_to_end(buf)
+    }
+    fn read_to_string(&mut self, buf: &mut String) -> io::Result<usize> {
+        self.inner.read_to_string(buf)
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod test_utils {
     use tempfile::TempDir;
 
-    use super::*;
-
-    fn create_temp_dir(prefix: &str) -> TempDir {
+    pub fn create_temp_dir(prefix: &str) -> TempDir {
         TempDir::with_prefix(prefix).unwrap()
     }
+}
+
+#[cfg(test)]
+mod chronofile_tests {
+    use super::test_utils::create_temp_dir;
+    use super::*;
 
     #[test]
     fn create() {
@@ -420,5 +444,107 @@ mod tests {
                 .as_secs()
                 >= now.duration_since(UNIX_EPOCH).unwrap().as_secs() - 1
         );
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+
+    use std::io::Write;
+
+    use super::test_utils::create_temp_dir;
+    use super::*;
+
+    #[test]
+    fn test_read() {
+        let dir = create_temp_dir("ChronoFile");
+        let mut file_path = dir.keep();
+        file_path.push("read-test.txt");
+
+        // Write some test data
+        let test_data = b"hello world";
+        {
+            let mut file = File::create(&file_path).unwrap();
+            file.write_all(test_data).unwrap();
+        }
+
+        // Open with ChronoFile and read
+        let mut cf = ChronoFile::open(&file_path).unwrap();
+        let mut buf = vec![0; test_data.len()];
+        let n = cf.read(&mut buf).unwrap();
+
+        assert_eq!(n, test_data.len());
+        assert_eq!(&buf, test_data);
+    }
+
+    #[test]
+    fn test_read_vectored() {
+        use std::io::IoSliceMut;
+
+        let dir = create_temp_dir("ChronoFile");
+        let mut file_path = dir.keep();
+        file_path.push("read_vectored-test.txt");
+
+        // Write some test data
+        let test_data = b"hello world";
+        {
+            let mut file = File::create(&file_path).unwrap();
+            file.write_all(test_data).unwrap();
+        }
+
+        // Open with ChronoFile and read with scatter/gather
+        let mut cf = ChronoFile::open(&file_path).unwrap();
+        let mut buf1 = vec![0; 5];
+        let mut buf2 = vec![0; 7];
+        let mut bufs = [IoSliceMut::new(&mut buf1), IoSliceMut::new(&mut buf2)];
+        let n = cf.read_vectored(&mut bufs).unwrap();
+
+        assert_eq!(n, test_data.len());
+        assert_eq!(&buf1[..5], b"hello");
+        assert_eq!(&buf2[..6], b" world"); // Only compare the bytes that were written
+    }
+
+    #[test]
+    fn test_read_to_end() {
+        let dir = create_temp_dir("ChronoFile");
+        let mut file_path = dir.keep();
+        file_path.push("read_to_end-test.txt");
+
+        // Write some test data
+        let test_data = b"hello world";
+        {
+            let mut file = File::create(&file_path).unwrap();
+            file.write_all(test_data).unwrap();
+        }
+
+        // Open with ChronoFile and read to end
+        let mut cf = ChronoFile::open(&file_path).unwrap();
+        let mut buf = Vec::new();
+        let n = cf.read_to_end(&mut buf).unwrap();
+
+        assert_eq!(n, test_data.len());
+        assert_eq!(&buf, test_data);
+    }
+
+    #[test]
+    fn test_read_to_string() {
+        let dir = create_temp_dir("ChronoFile");
+        let mut file_path = dir.keep();
+        file_path.push("read_to_string-test.txt");
+
+        // Write some test data
+        let test_data = "hello world";
+        {
+            let mut file = File::create(&file_path).unwrap();
+            file.write_all(test_data.as_bytes()).unwrap();
+        }
+
+        // Open with ChronoFile and read to string
+        let mut cf = ChronoFile::open(&file_path).unwrap();
+        let mut buf = String::new();
+        let n = cf.read_to_string(&mut buf).unwrap();
+
+        assert_eq!(n, test_data.len());
+        assert_eq!(&buf, test_data);
     }
 }
