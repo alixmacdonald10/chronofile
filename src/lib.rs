@@ -88,18 +88,18 @@ impl From<File> for ChronoFile {
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::*;
 
-    fn create_temp_dir(path: &str) -> TempDir {
-        TempDir::new(path).unwrap()
+    fn create_temp_dir(prefix: &str) -> TempDir {
+        TempDir::with_prefix(prefix).unwrap()
     }
 
     #[test]
     fn create() {
         let dir = create_temp_dir("ChronoFile");
-        let mut file_path = dir.into_path();
+        let mut file_path = dir.keep();
         file_path.push("create-test.txt");
 
         let file = ChronoFile::create(file_path);
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn open() {
         let dir = create_temp_dir("ChronoFile");
-        let mut file_path = dir.into_path();
+        let mut file_path = dir.keep();
         file_path.push("create-test.txt");
 
         {
