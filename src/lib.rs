@@ -25,7 +25,7 @@
 use std::{
     fmt,
     fs::{File, FileTimes, Metadata, OpenOptions, Permissions},
-    io::{self, IoSliceMut, Read},
+    io::{self, IoSlice, IoSliceMut, Read, Write},
     path::Path,
     time::SystemTime,
 };
@@ -276,6 +276,38 @@ impl fmt::Debug for ChronoFile {
     }
 }
 
+
+// TODO: Writing
+// - Prepare the file data (the version you want to store).
+// - Compute the uncompressed checksum (e.g., SHA-256) of the file data.
+// - Compress the file data (e.g., with zstd).
+// - Compute the compressed checksum (e.g., SHA-256) of the compressed data.
+// - Write the version block to the file in this order:
+//     - F (file marker)
+//     - Length of the compressed data (as ASCII)
+//     - :
+//     - Timestamp (e.g., 2026-02-26T12:00:00Z)
+//     - :SHA256_COMPRESSED:
+//     - Compressed checksum (hex)
+//     - :SHA256_UNCOMPRESSED:
+//     - Uncompressed checksum (hex)
+//     - Compressed data
+//  - write the actual file, rollback the version update if error
+impl Write for ChronoFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.inner.write_vectored(bufs)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 impl Read for ChronoFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         (self).inner.read(buf)
@@ -289,6 +321,35 @@ impl Read for ChronoFile {
     }
     fn read_to_string(&mut self, buf: &mut String) -> io::Result<usize> {
         self.inner.read_to_string(buf)
+    }
+}
+
+
+pub trait Restore {
+    fn restore(&mut self) -> io::Result<()>;
+}
+
+// TODO: restore
+// - Read the file marker (F).
+// - Read the length of the compressed data (up to the next :).
+// - Read the timestamp (up to the next :).
+// - Read the compressed checksum (after :SHA256_COMPRESSED:).
+// - Read the uncompressed checksum (after :SHA256_UNCOMPRESSED:).
+// - Read the compressed data (using the length from step 2).
+// - Verify the compressed checksum:
+//     - Compute SHA-256 of the compressed data.
+//     - Compare with the stored compressed checksum.
+//     - If they don’t match, the file is corrupted.
+// - Decompress the data.
+// - Verify the uncompressed checksum:
+//     - Compute SHA-256 of the decompressed data.
+//     - Compare with the stored uncompressed checksum.
+//     - If they don’t match, decompression failed or the file is corrupted.
+// - Return the decompressed data (now verified as correct).
+// - Save decompressed data as File
+impl Restore for ChronoFile {
+    fn restore(&mut self) -> io::Result<()> {
+        todo!()
     }
 }
 
