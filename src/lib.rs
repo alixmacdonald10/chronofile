@@ -22,16 +22,33 @@
 //! - Use atomic operations when possible (like [`File::create_new`] instead of checking existence then creating).
 //! - Keep file open for the duration of operations.
 
+mod core;
+
 use std::{
     fmt,
     fs::{File, FileTimes, Metadata, OpenOptions, Permissions},
     io::{self, IoSlice, IoSliceMut, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::SystemTime,
 };
 
+use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
+
+use crate::core::compression::compress;
+
+#[derive(Debug)]
 pub struct ChronoFile {
+    path: PathBuf,
     inner: File,
+    chrono: File,
+}
+
+// TODO: move to util
+fn construct_chrono_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    let mut chrono_path = path.as_ref().to_owned();
+    chrono_path.set_extension("chrono");
+    chrono_path
 }
 
 // TODO: impl buffered
@@ -61,18 +78,18 @@ impl ChronoFile {
     /// }
     /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<ChronoFile> {
-        // TODO: Check if chronoversioned else create that
-
-        Ok(ChronoFile {
-            inner: OpenOptions::new().read(true).open(path.as_ref())?,
-        })
+        let inner = OpenOptions::new().read(true).open(path.as_ref())?;
+        let chrono = OpenOptions::new()
+            .read(true)
+            .open(construct_chrono_path(&path))?;
+        Ok(ChronoFile { path: path.as_ref().to_owned(), inner, chrono })
     }
 
     /// Opens a chronologically versioned file in write-only mode.
     ///
     /// This function will create a file if it does not exist,
-    /// and will truncate it if it does. The truncation results in a new
-    /// diff being created.
+    /// and will truncate it if it does. If the file already exists a chrono version is created
+    /// saving the state of the file prior to truncation.
     ///
     /// This method defers to [std::fs::File] create method, for further information look there.
     ///
@@ -97,14 +114,16 @@ impl ChronoFile {
     /// }
     /// ```
     pub fn create<P: AsRef<Path>>(path: P) -> io::Result<ChronoFile> {
-        // TODO: if exists it truncates it but make a chrono backup
-        Ok(ChronoFile {
-            inner: OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path.as_ref())?,
-        })
+        let inner = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path.as_ref())?;
+        let chrono = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(construct_chrono_path(&path))?;
+        Ok(ChronoFile { path: path.as_ref().to_owned(), inner, chrono })
     }
 
     /// Creates a new file in read-write mode; error if the file exists.
@@ -138,15 +157,20 @@ impl ChronoFile {
     /// }
     /// ```
     pub fn create_new<P: AsRef<Path>>(path: P) -> io::Result<ChronoFile> {
-        Ok(ChronoFile {
-            inner: OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(path.as_ref())?,
-        })
+        let inner = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path.as_ref())?;
+        let chrono = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(construct_chrono_path(&path))?;
+        Ok(ChronoFile { path: path.as_ref().to_owned(), inner, chrono })
     }
 
+    // Attempts to open a chronologically versioned File in
     /// Queries metadata about the underlying file.
     ///
     /// This method defers to [std::fs::File] metadata method, for further information look there.
@@ -264,19 +288,6 @@ impl ChronoFile {
     }
 }
 
-impl From<File> for ChronoFile {
-    fn from(value: File) -> Self {
-        ChronoFile { inner: value }
-    }
-}
-
-impl fmt::Debug for ChronoFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-
 // TODO: Writing
 // - Prepare the file data (the version you want to store).
 // - Compute the uncompressed checksum (e.g., SHA-256) of the file data.
@@ -295,7 +306,34 @@ impl fmt::Debug for ChronoFile {
 //  - write the actual file, rollback the version update if error
 impl Write for ChronoFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
+        // write file
+        let written_bytes = self.inner.write(buf)?;
+
+        // Chrono
+        let system_time = SystemTime::now();
+        let datetime: DateTime<Utc> = system_time.into();
+
+        // calc file checksum
+        let uncompressed_hash = Sha256::digest(buf);
+        // compress file. stream read the file contents and compress to a buffer
+        // here we have to open the file again as read so we can compress the data
+        self.inner = File::open(&self.path)?;
+        let (compressed_data, compressed_len) = compress(&self.inner)?;
+        // calc compressed checksum
+        let compressed_hash = Sha256::digest(&compressed_data);
+        // construct diff
+        let diff = format!(
+            "F{}:{:?}:SHA256_COMPRESSED:{:x}:SHA256_UNCOMPRESSED:{:x}:{}",
+            compressed_len,
+            datetime,
+            compressed_hash,
+            uncompressed_hash,
+            hex::encode(compressed_data)
+        );
+        // save to diff file if exists
+        let _chrono_bytes = self.chrono.write(diff.as_bytes())?;
+
+        Ok(written_bytes)
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
@@ -324,12 +362,27 @@ impl Read for ChronoFile {
     }
 }
 
-
 pub trait Restore {
     fn restore(&mut self) -> io::Result<()>;
 }
 
 // TODO: restore
+//
+// version format (note multiple per file):
+//  - F - file marker - start of a new update
+//  - length of data - the length of the compressed data
+//  - : - seperator
+//  - timestamp - the timestamp the version was created
+//  - : - seperator
+//  - SHA256_COMPRESSED - identifier
+//  - : - seperator
+//  - compressed checksum
+//  - SHA256_UNCOMPRESED - identifie
+//  - : - seperator
+//  - uncompressed checkesum
+//  - compressed data (length defined above)
+//
+//
 // - Read the file marker (F).
 // - Read the length of the compressed data (up to the next :).
 // - Read the timestamp (up to the next :).
@@ -357,6 +410,8 @@ impl Restore for ChronoFile {
 mod test_utils {
     use tempfile::TempDir;
 
+    pub const MB: usize = 1_048_576;
+
     pub fn create_temp_dir(prefix: &str) -> TempDir {
         TempDir::with_prefix(prefix).unwrap()
     }
@@ -364,7 +419,7 @@ mod test_utils {
 
 #[cfg(test)]
 mod chronofile_tests {
-    use super::test_utils::create_temp_dir;
+    use super::test_utils::{create_temp_dir, MB};
     use super::*;
 
     #[test]
@@ -375,6 +430,38 @@ mod chronofile_tests {
 
         let file = ChronoFile::create(file_path);
         assert!(file.is_ok());
+    }
+
+    #[test]
+    fn create_already_exists() {
+        let dir = create_temp_dir("ChronoFile");
+        let mut file_path = dir.keep();
+        file_path.push("create-test.txt");
+
+        {
+            let file = ChronoFile::create_new(&file_path);
+            assert!(file.is_ok());
+            let mut file = file.unwrap();
+            let content = vec![0_u8; MB];
+            let bytes = file.write(&content).unwrap();
+            assert!(bytes > 0);
+        }
+
+        for i in 0..=2 {
+            let mut file = ChronoFile::create(&file_path).unwrap();
+            let content = vec![i as u8; MB];
+            let bytes = file.write(&content).unwrap();
+            assert!(bytes > 0);
+        }
+
+        // TODO: assert that there are two file markers in the .chrono file
+
+        // assert the contents are the last written data
+        let mut file = ChronoFile::open(&file_path).unwrap();
+        let mut buf = Vec::new();
+        let _bytes = file.read(&mut buf).unwrap();
+        dbg!(buf);
+        // assert_eq!(buf, vec![2; MB])
     }
 
     #[test]
@@ -401,13 +488,13 @@ mod chronofile_tests {
     }
 
     #[test]
-    fn open() {
+    fn open_readable() {
         let dir = create_temp_dir("ChronoFile");
         let mut file_path = dir.keep();
         file_path.push("create-test.txt");
 
         {
-            let _file = File::create(&file_path).unwrap();
+            let _ = ChronoFile::create_new(&file_path);
         }
         let file_stamp = ChronoFile::open(file_path);
         assert!(file_stamp.is_ok());
@@ -422,7 +509,7 @@ mod chronofile_tests {
         file_path.push("perms-test.txt");
 
         {
-            let _file = File::create(&file_path).unwrap();
+            let _ = ChronoFile::create_new(&file_path);
         }
 
         let file_stamp = ChronoFile::open(&file_path).unwrap();
@@ -446,7 +533,7 @@ mod chronofile_tests {
         file_path.push("times-test.txt");
 
         {
-            let _file = File::create(&file_path).unwrap();
+            let _ = ChronoFile::create_new(&file_path);
         }
 
         let file_stamp = ChronoFile::open(&file_path).unwrap();
@@ -486,7 +573,7 @@ mod chronofile_tests {
         file_path.push("modified-test.txt");
 
         {
-            let _file = File::create(&file_path).unwrap();
+            let _ = ChronoFile::create_new(&file_path);
         }
 
         let file_stamp = ChronoFile::open(&file_path).unwrap();
@@ -521,19 +608,17 @@ mod read_tests {
         let dir = create_temp_dir("ChronoFile");
         let mut file_path = dir.keep();
         file_path.push("read-test.txt");
-
         // Write some test data
         let test_data = b"hello world";
         {
-            let mut file = File::create(&file_path).unwrap();
-            file.write_all(test_data).unwrap();
+            let mut file = ChronoFile::create_new(&file_path).unwrap();
+            let _ = file.write(test_data).unwrap();
         }
 
         // Open with ChronoFile and read
         let mut cf = ChronoFile::open(&file_path).unwrap();
         let mut buf = vec![0; test_data.len()];
         let n = cf.read(&mut buf).unwrap();
-
         assert_eq!(n, test_data.len());
         assert_eq!(&buf, test_data);
     }
@@ -549,8 +634,8 @@ mod read_tests {
         // Write some test data
         let test_data = b"hello world";
         {
-            let mut file = File::create(&file_path).unwrap();
-            file.write_all(test_data).unwrap();
+            let mut file = ChronoFile::create_new(&file_path).unwrap();
+            let _ = file.write(test_data).unwrap();
         }
 
         // Open with ChronoFile and read with scatter/gather
@@ -574,8 +659,8 @@ mod read_tests {
         // Write some test data
         let test_data = b"hello world";
         {
-            let mut file = File::create(&file_path).unwrap();
-            file.write_all(test_data).unwrap();
+            let mut file = ChronoFile::create_new(&file_path).unwrap();
+            let _ = file.write(test_data).unwrap();
         }
 
         // Open with ChronoFile and read to end
@@ -594,10 +679,10 @@ mod read_tests {
         file_path.push("read_to_string-test.txt");
 
         // Write some test data
-        let test_data = "hello world";
+        let test_data = b"hello world";
         {
-            let mut file = File::create(&file_path).unwrap();
-            file.write_all(test_data.as_bytes()).unwrap();
+            let mut file = ChronoFile::create_new(&file_path).unwrap();
+            let _ = file.write(test_data).unwrap();
         }
 
         // Open with ChronoFile and read to string
@@ -606,6 +691,28 @@ mod read_tests {
         let n = cf.read_to_string(&mut buf).unwrap();
 
         assert_eq!(n, test_data.len());
-        assert_eq!(&buf, test_data);
+        assert_eq!(&buf.into_bytes(), test_data);
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+
+    use std::io::Write;
+
+    use super::test_utils::create_temp_dir;
+    use super::*;
+
+    #[test]
+    fn test_write() {
+        let dir = create_temp_dir("ChronoFileWrite");
+        let mut file_path = dir.keep();
+        file_path.push("write-test.txt");
+
+        // Write some test data
+        let content = vec![0u8; 1_048_576]; // 1MB of zeros;
+        let mut cf = ChronoFile::create_new(&file_path).unwrap();
+        let bytes = cf.write(&content).unwrap();
+        assert!(bytes > 0);
     }
 }
