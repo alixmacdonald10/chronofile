@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: "0 6 * * *" # Runs at 6 AM UTC every day
   workflow_dispatch:
-    branches: [ "*" ]
+    branches: ["*"]
 
 permissions:
   issues: write
@@ -14,37 +14,21 @@ jobs:
   check-file:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout rust-lang/rust
-        uses: actions/checkout@v4
-        with:
-          repository: rust-lang/rust
-          path: rust
-          fetch-depth: 1
-
-      - name: Check for fs.rs changes
+      - name: Check for fs.rs changes via GitHub API
         id: check
         run: |
-          cd rust
-
-          # Get short commit hashes of any changes
-          HASHES=$(git log --since="yesterday 05:59" --format="%h" -- ./library/std/src/fs.rs)
-          if [ -z "$HASHES" ]; then
+          response=$(curl -s "https://api.github.com/repos/rust-lang/rust/commits?path=library/std/src/fs.rs&since=$(date -d '24 hours ago' --iso-8601=seconds)")
+          if [ "$(echo "$response" | jq '. | length')" -eq 0 ]; then
             echo "no changes made!"
             echo "file_changed=false" >> $GITHUB_OUTPUT
           else
             echo "changes made!"
-            echo "Commit hashes:"
-            echo "$HASHES"
+            echo "$response" | jq -r '.[].sha' > hashes.txt
             echo "file_changed=true" >> $GITHUB_OUTPUT
-            # Format hashes for multiline output
-            {
-              echo 'hashes<<EOF'
-              echo "$HASHES"
-              echo EOF
-            } >> $GITHUB_OUTPUT
+            echo "hashes=$(cat hashes.txt)" >> $GITHUB_OUTPUT
           fi
-
       - name: Checkout this repository
+        if: steps.check.outputs.file_changed == 'true'
         uses: actions/checkout@v4
       - name: Create issue for changes
         if: steps.check.outputs.file_changed == 'true'
