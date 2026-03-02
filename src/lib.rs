@@ -25,17 +25,15 @@
 mod core;
 
 use std::{
-    fmt,
     fs::{File, FileTimes, Metadata, OpenOptions, Permissions},
     io::{self, IoSlice, IoSliceMut, Read, Write},
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
-use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::core::compression::compress;
+use crate::core::{compression::compress, diff::Diff};
 
 #[derive(Debug)]
 pub struct ChronoFile {
@@ -53,6 +51,7 @@ fn construct_chrono_path<P: AsRef<Path>>(path: P) -> PathBuf {
 
 // TODO: impl buffered
 // TODO: impl lock
+// TODO: impl metadata
 impl ChronoFile {
     /// Attempts to open a chronologically versioned File in read-only mode.
     ///
@@ -82,7 +81,11 @@ impl ChronoFile {
         let chrono = OpenOptions::new()
             .read(true)
             .open(construct_chrono_path(&path))?;
-        Ok(ChronoFile { path: path.as_ref().to_owned(), inner, chrono })
+        Ok(ChronoFile {
+            path: path.as_ref().to_owned(),
+            inner,
+            chrono,
+        })
     }
 
     /// Opens a chronologically versioned file in write-only mode.
@@ -123,7 +126,11 @@ impl ChronoFile {
             .append(true)
             .create(true)
             .open(construct_chrono_path(&path))?;
-        Ok(ChronoFile { path: path.as_ref().to_owned(), inner, chrono })
+        Ok(ChronoFile {
+            path: path.as_ref().to_owned(),
+            inner,
+            chrono,
+        })
     }
 
     /// Creates a new file in read-write mode; error if the file exists.
@@ -167,7 +174,11 @@ impl ChronoFile {
             .write(true)
             .create_new(true)
             .open(construct_chrono_path(&path))?;
-        Ok(ChronoFile { path: path.as_ref().to_owned(), inner, chrono })
+        Ok(ChronoFile {
+            path: path.as_ref().to_owned(),
+            inner,
+            chrono,
+        })
     }
 
     // Attempts to open a chronologically versioned File in
@@ -288,64 +299,47 @@ impl ChronoFile {
     }
 }
 
-// TODO: Writing
-// - Prepare the file data (the version you want to store).
-// - Compute the uncompressed checksum (e.g., SHA-256) of the file data.
-// - Compress the file data (e.g., with zstd).
-// - Compute the compressed checksum (e.g., SHA-256) of the compressed data.
-// - Write the version block to the file in this order:
-//     - F (file marker)
-//     - Length of the compressed data (as ASCII)
-//     - :
-//     - Timestamp (e.g., 2026-02-26T12:00:00Z)
-//     - :SHA256_COMPRESSED:
-//     - Compressed checksum (hex)
-//     - :SHA256_UNCOMPRESSED:
-//     - Uncompressed checksum (hex)
-//     - Compressed data
-//  - write the actual file, rollback the version update if error
+impl ChronoFile {
+    fn write_version(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let uncompressed_hash = Sha256::digest(buf);
+        let (compressed_data, _compressed_len) = compress(buf)?;
+        let compressed_hash = Sha256::digest(&compressed_data);
+        let diff = Diff::new(
+            uncompressed_hash.into(),
+            compressed_hash.into(),
+            compressed_data,
+        );
+        let encoded: Vec<u8> = bincode2::serialize(&diff).unwrap();
+        self.chrono.write(&encoded)
+    }
+}
+
+// TODO: DOC STRINGS
 impl Write for ChronoFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // write file
-        let written_bytes = self.inner.write(buf)?;
+        let _chrono_bytes = self.write_version(buf)?;
 
-        // Chrono
-        let system_time = SystemTime::now();
-        let datetime: DateTime<Utc> = system_time.into();
-
-        // calc file checksum
-        let uncompressed_hash = Sha256::digest(buf);
-        // compress file. stream read the file contents and compress to a buffer
-        // here we have to open the file again as read so we can compress the data
-        self.inner = File::open(&self.path)?;
-        let (compressed_data, compressed_len) = compress(&self.inner)?;
-        // calc compressed checksum
-        let compressed_hash = Sha256::digest(&compressed_data);
-        // construct diff
-        let diff = format!(
-            "F{}:{:?}:SHA256_COMPRESSED:{:x}:SHA256_UNCOMPRESSED:{:x}:{}",
-            compressed_len,
-            datetime,
-            compressed_hash,
-            uncompressed_hash,
-            hex::encode(compressed_data)
-        );
-        // save to diff file if exists
-        let _chrono_bytes = self.chrono.write(diff.as_bytes())?;
-
-        Ok(written_bytes)
+        self.inner.write(buf)
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        let mut concatenated = Vec::with_capacity(bufs.iter().map(|s| s.len()).sum());
+        for buf in bufs {
+            concatenated.extend_from_slice(buf);
+        }
+        let _chrono_bytes = self.write_version(&concatenated)?;
+
         self.inner.write_vectored(bufs)
     }
 
     #[inline]
     fn flush(&mut self) -> io::Result<()> {
+        self.chrono.flush()?;
         self.inner.flush()
     }
 }
 
+/// All read methods only read the file not the chronofile.
 impl Read for ChronoFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         (self).inner.read(buf)
@@ -362,50 +356,6 @@ impl Read for ChronoFile {
     }
 }
 
-pub trait Restore {
-    fn restore(&mut self) -> io::Result<()>;
-}
-
-// TODO: restore
-//
-// version format (note multiple per file):
-//  - F - file marker - start of a new update
-//  - length of data - the length of the compressed data
-//  - : - seperator
-//  - timestamp - the timestamp the version was created
-//  - : - seperator
-//  - SHA256_COMPRESSED - identifier
-//  - : - seperator
-//  - compressed checksum
-//  - SHA256_UNCOMPRESED - identifie
-//  - : - seperator
-//  - uncompressed checkesum
-//  - compressed data (length defined above)
-//
-//
-// - Read the file marker (F).
-// - Read the length of the compressed data (up to the next :).
-// - Read the timestamp (up to the next :).
-// - Read the compressed checksum (after :SHA256_COMPRESSED:).
-// - Read the uncompressed checksum (after :SHA256_UNCOMPRESSED:).
-// - Read the compressed data (using the length from step 2).
-// - Verify the compressed checksum:
-//     - Compute SHA-256 of the compressed data.
-//     - Compare with the stored compressed checksum.
-//     - If they don’t match, the file is corrupted.
-// - Decompress the data.
-// - Verify the uncompressed checksum:
-//     - Compute SHA-256 of the decompressed data.
-//     - Compare with the stored uncompressed checksum.
-//     - If they don’t match, decompression failed or the file is corrupted.
-// - Return the decompressed data (now verified as correct).
-// - Save decompressed data as File
-impl Restore for ChronoFile {
-    fn restore(&mut self) -> io::Result<()> {
-        todo!()
-    }
-}
-
 #[cfg(test)]
 mod test_utils {
     use tempfile::TempDir;
@@ -419,7 +369,7 @@ mod test_utils {
 
 #[cfg(test)]
 mod chronofile_tests {
-    use super::test_utils::{create_temp_dir, MB};
+    use super::test_utils::{MB, create_temp_dir};
     use super::*;
 
     #[test]

@@ -1,17 +1,14 @@
-use std::{
-    fs::File,
-    io::{self, BufReader, BufWriter, Read, Write},
-};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 
 use snap::{read::FrameDecoder, write::FrameEncoder};
 
 // TODO: error handle
 // TODO: doc comments
-pub fn compress(file: &File) -> io::Result<(Vec<u8>, usize)> {
+pub fn compress(buf: &[u8]) -> io::Result<(Vec<u8>, usize)> {
     // compress file. stream read the file contents and compress to a buffer
     let buf_writer = BufWriter::new(Vec::new());
     let mut writer = FrameEncoder::new(buf_writer);
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(buf);
     io::copy(&mut reader, &mut writer)?;
     let compressed_data = writer
         .into_inner()
@@ -23,8 +20,8 @@ pub fn compress(file: &File) -> io::Result<(Vec<u8>, usize)> {
 }
 
 // TODO: Doc comment
-pub fn decompress(data: &[u8]) -> io::Result<Vec<u8>> {
-    let mut decoder = FrameDecoder::new(data);
+pub fn decompress(buf: &[u8]) -> io::Result<Vec<u8>> {
+    let mut decoder = FrameDecoder::new(buf);
     let mut buf = Vec::new();
     decoder.read_to_end(&mut buf)?;
     Ok(buf)
