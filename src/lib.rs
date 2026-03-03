@@ -37,7 +37,6 @@ use crate::core::{compression::compress, diff::Diff};
 
 #[derive(Debug)]
 pub struct ChronoFile {
-    path: PathBuf,
     inner: File,
     chrono: File,
 }
@@ -82,7 +81,6 @@ impl ChronoFile {
             .read(true)
             .open(construct_chrono_path(&path))?;
         Ok(ChronoFile {
-            path: path.as_ref().to_owned(),
             inner,
             chrono,
         })
@@ -127,7 +125,6 @@ impl ChronoFile {
             .create(true)
             .open(construct_chrono_path(&path))?;
         Ok(ChronoFile {
-            path: path.as_ref().to_owned(),
             inner,
             chrono,
         })
@@ -175,7 +172,6 @@ impl ChronoFile {
             .create_new(true)
             .open(construct_chrono_path(&path))?;
         Ok(ChronoFile {
-            path: path.as_ref().to_owned(),
             inner,
             chrono,
         })
