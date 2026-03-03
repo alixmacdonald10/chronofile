@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
 pub struct Diff {
-    timestamp: u64,
+    pub timestamp: u64,
     uncompressed_hash: [u8; 32],
     compressed_hash: [u8; 32],
     compressed_data: Vec<u8>,

@@ -316,13 +316,27 @@ impl ChronoFile {
     }
 
     /// Restore the file to the latest version at/before the given timestamp
-    fn restore(&mut self, timestamp: u64) -> io::Result<()> {
-        todo!()
-    }
+    ///
+    /// This reads an entire binary .chrono file in chunks (diffs) and constructs them
+    /// into a vec of diffs
+    pub fn versions(&mut self) -> io::Result<Vec<u64>> {
+        let mut buf = Vec::new();
+        self.chrono.read_to_end(&mut buf)?;
 
-    /// Lists available version timestamps
-    fn versions(&mut self) -> io::Result<Vec<u64>> {
-        todo!()
+        let mut diffs = Vec::new();
+        let mut offset = 0;
+        while offset < buf.len() {
+            // Deserialize a single Diff from the buffer at the current offset
+            let diff: Diff = bincode2::deserialize(&buf[offset..]).map_err(|err| {
+                eprintln!("Failed to deserialize Diff at offset {}: {}", offset, err);
+                io::Error::new(io::ErrorKind::InvalidData, err)
+            })?;
+            // Move the offset forward by the size of the serialized Diff
+            offset += bincode2::serialized_size(&diff).unwrap() as usize;
+            diffs.push(diff);
+        }
+
+        Ok(diffs.into_iter().map(|diff| diff.timestamp).collect())
     }
 }
 
