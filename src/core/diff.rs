@@ -36,8 +36,4 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_deser() {
-        todo!()
-    }
 }

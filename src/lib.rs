@@ -422,7 +422,6 @@ mod chronofile_tests {
         let mut file = ChronoFile::open(&file_path).unwrap();
         let mut buf = Vec::new();
         let _bytes = file.read(&mut buf).unwrap();
-        dbg!(buf);
         // assert_eq!(buf, vec![2; MB])
     }
 
