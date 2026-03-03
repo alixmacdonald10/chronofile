@@ -1,6 +1,5 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -17,9 +16,11 @@ impl Diff {
         compressed_hash: [u8; 32],
         compressed_data: Vec<u8>,
     ) -> Self {
-        let datetime: DateTime<Utc> = SystemTime::now().into();
-        // SAFETY: u64 will never fail as system time always > 1970
-        let timestamp = datetime.timestamp().try_into().unwrap();
+        // SAFETY: panics if System Time is < 1970
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Failed")
+            .as_secs();
 
         Self {
             timestamp,
