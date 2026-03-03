@@ -295,7 +295,13 @@ impl ChronoFile {
     }
 }
 
+/// Chrono Methods
 impl ChronoFile {
+    /// Writes a new version to the .chrono file
+    ///
+    /// This writes a new version in binary format to the .chrono file. This compresses the data for
+    /// added efficiency and calculates both the uncompressed and compressed Sha256 hashes for integrity
+    /// checks.
     fn write_version(&mut self, buf: &[u8]) -> io::Result<usize> {
         let uncompressed_hash = Sha256::digest(buf);
         let (compressed_data, _compressed_len) = compress(buf)?;
@@ -307,6 +313,16 @@ impl ChronoFile {
         );
         let encoded: Vec<u8> = bincode2::serialize(&diff).unwrap();
         self.chrono.write(&encoded)
+    }
+
+    /// Restore the file to the latest version at/before the given timestamp
+    fn restore(&mut self, timestamp: u64) -> io::Result<()> {
+        todo!()
+    }
+
+    /// Lists available version timestamps
+    fn versions(&mut self) -> io::Result<Vec<u64>> {
+        todo!()
     }
 }
 
