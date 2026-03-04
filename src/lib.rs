@@ -33,7 +33,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-use crate::core::{compression::compress, diff::Diff};
+use crate::core::{compression::{compress, decompress}, diff::Diff};
 
 #[derive(Debug)]
 pub struct ChronoFile {
@@ -80,10 +80,7 @@ impl ChronoFile {
         let chrono = OpenOptions::new()
             .read(true)
             .open(construct_chrono_path(&path))?;
-        Ok(ChronoFile {
-            inner,
-            chrono,
-        })
+        Ok(ChronoFile { inner, chrono })
     }
 
     /// Opens a chronologically versioned file in write-only mode.
@@ -121,13 +118,11 @@ impl ChronoFile {
             .truncate(true)
             .open(path.as_ref())?;
         let chrono = OpenOptions::new()
+            .read(true)
             .append(true)
             .create(true)
             .open(construct_chrono_path(&path))?;
-        Ok(ChronoFile {
-            inner,
-            chrono,
-        })
+        Ok(ChronoFile { inner, chrono })
     }
 
     /// Creates a new file in read-write mode; error if the file exists.
@@ -171,10 +166,7 @@ impl ChronoFile {
             .write(true)
             .create_new(true)
             .open(construct_chrono_path(&path))?;
-        Ok(ChronoFile {
-            inner,
-            chrono,
-        })
+        Ok(ChronoFile { inner, chrono })
     }
 
     // Attempts to open a chronologically versioned File in
@@ -319,7 +311,7 @@ impl ChronoFile {
     ///
     /// This reads an entire binary .chrono file in chunks (diffs) and constructs them
     /// into a vec of diffs
-    pub fn versions(&mut self) -> io::Result<Vec<u64>> {
+    pub fn versions(&mut self) -> io::Result<Vec<Diff>> {
         let mut buf = Vec::new();
         self.chrono.read_to_end(&mut buf)?;
 
@@ -336,7 +328,25 @@ impl ChronoFile {
             diffs.push(diff);
         }
 
-        Ok(diffs.into_iter().map(|diff| diff.timestamp).collect())
+        Ok(diffs)
+    }
+
+    pub fn restore(&mut self, timestamp: SystemTime) -> io::Result<usize> {
+        let versions = self.versions()?;
+
+        // find the closest version in the past
+        let version = versions
+            .into_iter()
+            .filter(|version| {
+                let sys_time: SystemTime = version.into();
+                sys_time <= timestamp
+                })
+            .max()
+            .unwrap();
+        let decompressed = decompress(&version.compressed_data)?;
+        let _chrono_bytes = self.write_version(&decompressed);
+        self.inner.write(&decompressed)
+
     }
 }
 
