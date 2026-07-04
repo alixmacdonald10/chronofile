@@ -2,15 +2,19 @@
 name = "chronofile"
 version = "0.1.0"
 edition = "2024"
-name = "tokio"
 authors = ["A Macdonald"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/alixmacdonald10/chronofile"
-description = """
-
-"""
-categories = [""]
-keywords = [""]
+description = "A time-travelable file for Rust: implements Read and Write for the latest version while storing versioned diffs in a companion .chrono file to restore any previous version."
+categories = ["data-structures", "encoding"]
+keywords = ["versioning", "diff", "time-travel", "snapshot", "history"]
 
 [dependencies]
+bincode2 = "2.0.1"
+diffy = { version = "0.5.0", features = ["std"] }
+serde = { version = "1.0.228", features = ["derive"] }
+
+
+[dev-dependencies]
+tempfile = "3.27.0"
