@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    # The release job commits CHANGELOG.md back to main; ignore that push so it
+    # doesn't retrigger CI.
+    paths-ignore:
+      - CHANGELOG.md
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - id: v
+        name: Read version + check tag
+        run: |
+          VERSION=$(grep -m1 '^version[[:space:]]*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::Cargo.toml version '$VERSION' is not valid semver (expected e.g. 0.1.1)."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists — nothing to release. Bump the version in Cargo.toml to publish."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version $VERSION is new — will release on success."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  audit:
+    name: Security audit (cargo audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  unit-tests:
+    name: Unit tests (cargo test)
+    runs-on: ubuntu-latest
+    needs: audit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  release:
+    name: Tag + publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [version, unit-tests]
+    if: needs.version.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Build changelog
+        run: |
+          # Full changelog committed to the repo (unreleased commits become $VERSION).
+          git cliff --tag "$VERSION" -o CHANGELOG.md
+          # Latest section only, for the GitHub release body (kept out of the repo).
+          git cliff --latest --strip header --tag "$VERSION" -o "$RUNNER_TEMP/CHANGELOG_NOTES.md"
+
+      - name: Commit changelog and tag release
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(release): update CHANGELOG.md for $VERSION"
+          git tag "$VERSION"
+          git push origin HEAD:main
+          git push origin "$VERSION"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$VERSION" --notes-file "$RUNNER_TEMP/CHANGELOG_NOTES.md" --title "$VERSION"
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish
