@@ -42,10 +42,11 @@ file keeps working — you add `commit()` at the points that mark a version.
 
 A version is created only when you call [`commit`](#versions-are-explicit). Each
 commit diffs the current contents against the previous commit and appends the
-patch to the `.chrono` log. Restoring replays the patches from the start up to
-the target version, rewrites the main file with those contents, and records the
-restore as a new version (so the restore itself is part of the history and
-becomes the baseline for the next `commit`).
+patch to the `.chrono` log. Both `preview` and `restore` reconstruct a version
+by replaying patches from the start up to the target — `preview` returns those
+bytes read-only (the working file is untouched), while `restore` also rewrites
+the main file and records the restore as a new version (so the restore itself
+is part of the history and becomes the baseline for the next `commit`).
 
 ## Versions Are Explicit
 
@@ -86,18 +87,38 @@ let mut buf = String::new();
 cf.read_to_string(&mut buf)?;
 ```
 
-Restore an earlier version and count versions:
+List versions, peek at one without disturbing the file, then restore:
 
 ```rust
 use chronofile::History;
 
-let n = cf.list_versions()?;       // number of committed versions
-let bytes = cf.restore(0)?;        // rewrite the file to version 0, return its bytes
+// each version carries its id and commit time so you can tell them apart
+for v in cf.list_versions()? {
+    println!("version {} committed at {:?}", v.id, v.timestamp);
+}
+
+// look at what an old version contains WITHOUT changing the working file
+let old = cf.preview(0)?;           // bytes as of version 0; file untouched
+
+// once you've picked one, restore it (rewrites the file + records a new version)
+let bytes = cf.restore(0)?;
 ```
 
-`restore` overwrites the main file with the target version's contents and
-records the restore as a new version. Restoring the current latest version
-changes nothing, so it records no new version.
+`list_versions` returns a `VersionInfo { id, timestamp }` per committed version.
+Use `preview(id)` to compare candidates read-only, then `restore(id)` to apply
+the one you want. `restore` overwrites the main file and records the restore as
+a new version; restoring the current latest version changes nothing, so it
+records none.
+
+You can also select by **time** instead of id — `preview_at(t)` and
+`restore_at(t)` resolve to the latest version committed at or before `t`:
+
+```rust
+use std::time::{Duration, SystemTime};
+
+let an_hour_ago = SystemTime::now() - Duration::from_secs(3600);
+let bytes = cf.restore_at(an_hour_ago)?;   // "roll back to how it was an hour ago"
+```
 
 ### Opening semantics
 
@@ -114,14 +135,16 @@ Implemented:
 - `ChronoFile::create` / `ChronoFile::open`
 - `Read` / `Write` (pass-through to the main file)
 - `commit()` — record a version, returns the version id (`None` if unchanged)
-- `History::restore` — replay the log to reconstruct a version, rewrite the
-  file, and record the restore as a new version
-- `History::list_versions` — number of committed versions
+- `History::list_versions` — every version with its id and commit timestamp
+- `History::preview` / `preview_at` — reconstruct a version's contents without
+  touching the main file (by id, or as of a point in time)
+- `History::restore` / `restore_at` — replay the log to reconstruct a version
+  (by id or as of a time), rewrite the file, and record the restore as a new
+  version
 
 ## Roadmap
 
-- Version metadata for `list_versions()` (timestamps, tags) rather than a bare
-  count.
+- Richer version metadata (messages, tags) beyond id + timestamp.
 - `Seek` impl for full `std::fs::File` parity.
 - `sync_all` / `metadata` and other `File` parity methods.
 - Integrity checksums to detect corruption on read.

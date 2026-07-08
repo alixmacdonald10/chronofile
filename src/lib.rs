@@ -10,10 +10,66 @@ use std::{
 
 mod patches;
 
-use patches::Patches;
+use patches::{Patches, Select};
+
+/// Current wall-clock time as milliseconds since the Unix epoch. Clocks set
+/// before 1970 clamp to 0 rather than erroring — a version timestamp is
+/// advisory metadata, never load-bearing.
+fn now_ms() -> u64 {
+    to_ms(std::time::SystemTime::now())
+}
+
+/// A [`SystemTime`](std::time::SystemTime) as milliseconds since the Unix
+/// epoch. Times before 1970 clamp to 0.
+fn to_ms(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Metadata for one committed version, as returned by
+/// [`list_versions`](History::list_versions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VersionInfo {
+    /// Zero-based version id — pass this to [`restore`](History::restore) or
+    /// [`preview`](History::preview).
+    pub id: u64,
+    /// Wall-clock time the version was committed.
+    pub timestamp: std::time::SystemTime,
+}
 
 /// Read access to a file's committed version history.
 pub trait History {
+    /// Lists every committed version, oldest first, with its id and commit
+    /// time so a caller can decide which one to [`preview`](History::preview)
+    /// or [`restore`](History::restore).
+    ///
+    /// Returns an empty vec when nothing has been committed yet.
+    fn list_versions(&mut self) -> std::io::Result<Vec<VersionInfo>>;
+
+    /// Returns the file's contents as of `version` **without touching the main
+    /// file** — a read-only peek to compare versions before restoring.
+    ///
+    /// `version` is a zero-based commit id (see
+    /// [`list_versions`](History::list_versions)); the contents are
+    /// reconstructed by replaying patches `0..=version`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidInput`](std::io::ErrorKind::InvalidInput) if `version`
+    /// does not exist, or an I/O error if the log cannot be read/replayed.
+    fn preview(&mut self, version: u64) -> std::io::Result<Vec<u8>>;
+
+    /// Like [`preview`](History::preview), but selects the version by time:
+    /// the latest version committed **at or before** `time`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidInput`](std::io::ErrorKind::InvalidInput) if no version
+    /// was committed at or before `time`, or an I/O error if the log cannot be
+    /// read/replayed.
+    fn preview_at(&mut self, time: std::time::SystemTime) -> std::io::Result<Vec<u8>>;
+
     /// Restores the file to its contents as of `version` and returns those
     /// bytes.
     ///
@@ -35,11 +91,15 @@ pub trait History {
     /// the main file cannot be rewritten.
     fn restore(&mut self, version: u64) -> std::io::Result<Vec<u8>>;
 
-    /// Returns the number of committed versions.
+    /// Like [`restore`](History::restore), but selects the version by time:
+    /// restores the latest version committed **at or before** `time`.
     ///
-    /// Valid version ids are `0..list_versions()`. Zero means nothing has been
-    /// committed yet.
-    fn list_versions(&mut self) -> std::io::Result<usize>;
+    /// # Errors
+    ///
+    /// Returns [`InvalidInput`](std::io::ErrorKind::InvalidInput) if no version
+    /// was committed at or before `time`, or an I/O error if the log cannot be
+    /// read/replayed or the main file cannot be rewritten.
+    fn restore_at(&mut self, time: std::time::SystemTime) -> std::io::Result<Vec<u8>>;
 }
 
 /// A writable file that records its version history in a companion `.chrono`
@@ -252,7 +312,7 @@ impl ChronoFile {
         let patch_bytes = diffy::create_patch_bytes(&self.snapshot, &current).to_bytes();
 
         let mut patches = self.load_patches()?;
-        patches.push(patch_bytes);
+        patches.push(patch_bytes, now_ms());
         let id = patches.len() as u64 - 1;
         self.write_log(&patches)?;
 
@@ -284,30 +344,62 @@ impl std::io::Read for ChronoFile {
 }
 
 impl History for ChronoFile {
+    fn list_versions(&mut self) -> std::io::Result<Vec<VersionInfo>> {
+        let patches = self.load_patches()?;
+        Ok(patches
+            .0
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| VersionInfo {
+                id: i as u64,
+                timestamp: std::time::UNIX_EPOCH
+                    + std::time::Duration::from_millis(entry.timestamp_ms),
+            })
+            .collect())
+    }
+
+    fn preview(&mut self, version: u64) -> std::io::Result<Vec<u8>> {
+        self.reconstruct(Select::Version(version as usize))
+    }
+
+    fn preview_at(&mut self, time: std::time::SystemTime) -> std::io::Result<Vec<u8>> {
+        self.reconstruct(Select::AsOf(to_ms(time)))
+    }
+
     fn restore(&mut self, version: u64) -> std::io::Result<Vec<u8>> {
+        let data = self.reconstruct(Select::Version(version as usize))?;
+        self.apply(data)
+    }
+
+    fn restore_at(&mut self, time: std::time::SystemTime) -> std::io::Result<Vec<u8>> {
+        let data = self.reconstruct(Select::AsOf(to_ms(time)))?;
+        self.apply(data)
+    }
+}
+
+impl ChronoFile {
+    /// Reconstructs the contents of the version picked by `select` by replaying
+    /// its patches onto an empty buffer. Does **not** touch the main file.
+    fn reconstruct(&mut self, select: Select) -> std::io::Result<Vec<u8>> {
         let all_patches = self.load_patches()?;
-        match all_patches.filter(version as usize) {
-            // replay patches 0..=version, overwrite the main file with the
-            // reconstructed contents, then commit them as a new version so the
-            // restore itself is recorded in the history and becomes the new
-            // snapshot baseline
-            Some(entries) => {
-                let data = Patches(entries.to_vec()).replay()?;
-                self.file.rewind()?;
-                self.file.write_all(&data)?;
-                self.file.set_len(data.len() as u64)?;
-                self.commit()?;
-                Ok(data)
-            }
+        match all_patches.filter(select) {
+            Some(entries) => Patches(entries.to_vec()).replay(),
             None => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("No version {version} found in .chrono"),
+                "no matching version found in .chrono".to_string(),
             )),
         }
     }
 
-    fn list_versions(&mut self) -> std::io::Result<usize> {
-        Ok(self.load_patches()?.len())
+    /// Overwrites the main file with `data` (rewind + write + truncate) and
+    /// commits it as a new version, returning `data`.
+    fn apply(&mut self, data: Vec<u8>) -> std::io::Result<Vec<u8>> {
+        self.file.rewind()?;
+        self.file.write_all(&data)?;
+        self.file.set_len(data.len() as u64)?;
+        // record the restore so it becomes the new snapshot baseline
+        self.commit()?;
+        Ok(data)
     }
 }
 
@@ -420,8 +512,8 @@ mod tests {
     #[test]
     fn patches_bincode_roundtrip() {
         let mut patches = Patches::default();
-        patches.0.push(b"patch-one".to_vec());
-        patches.0.push(b"patch-two".to_vec());
+        patches.push(b"patch-one".to_vec(), 111);
+        patches.push(b"patch-two".to_vec(), 222);
 
         let encoded = bincode2::serialize(&patches).unwrap();
         let decoded: Patches = bincode2::deserialize(&encoded[..]).unwrap();
@@ -438,9 +530,7 @@ mod tests {
         // seed a valid, replayable encoded log (open replays it on open, so
         // each patch must parse and apply from an empty base)
         let mut patches = Patches::default();
-        patches
-            .0
-            .push(diffy::create_patch_bytes(b"", b"content\n").to_bytes());
+        patches.push(diffy::create_patch_bytes(b"", b"content\n").to_bytes(), 0);
         let encoded = bincode2::serialize(&patches).unwrap();
 
         std::fs::File::create(&path).unwrap();
@@ -528,8 +618,8 @@ mod tests {
         // correct order: replaying patches 0..=i reconstructs version i's full
         // contents.
         let mut data: Vec<u8> = Vec::new();
-        for (i, patch_bytes) in patches.0.iter().enumerate() {
-            let patch = diffy::Patch::from_bytes(patch_bytes).unwrap();
+        for (i, entry) in patches.0.iter().enumerate() {
+            let patch = diffy::Patch::from_bytes(&entry.patch).unwrap();
             data = diffy::apply_bytes(&data, &patch).unwrap();
             assert_eq!(data, expected[i], "patch {i} out of order");
         }
@@ -560,7 +650,7 @@ mod tests {
         let path = tmp.path().join("file.dat");
 
         let mut cf = ChronoFile::create(&path).unwrap();
-        assert_eq!(cf.list_versions().unwrap(), 0);
+        assert!(cf.list_versions().unwrap().is_empty());
     }
 
     #[test]
@@ -569,7 +659,13 @@ mod tests {
         let (path, expected) = seed_versions(tmp.path(), 4);
 
         let mut cf = ChronoFile::open(&path).unwrap();
-        assert_eq!(cf.list_versions().unwrap(), expected.len());
+        let versions = cf.list_versions().unwrap();
+        assert_eq!(versions.len(), expected.len());
+        // ids are the sequential 0..n
+        assert_eq!(
+            versions.iter().map(|v| v.id).collect::<Vec<_>>(),
+            (0..expected.len() as u64).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -609,11 +705,11 @@ mod tests {
         let (path, expected) = seed_versions(tmp.path(), 4); // versions 0..=3
 
         let mut cf = ChronoFile::open(&path).unwrap();
-        assert_eq!(cf.list_versions().unwrap(), 4);
+        assert_eq!(cf.list_versions().unwrap().len(), 4);
 
         // restoring an older version appends a new version recording it
         cf.restore(1).unwrap();
-        assert_eq!(cf.list_versions().unwrap(), 5);
+        assert_eq!(cf.list_versions().unwrap().len(), 5);
 
         // snapshot now == restored contents, so an immediate commit is a no-op
         assert_eq!(cf.commit().unwrap(), None);
@@ -630,7 +726,118 @@ mod tests {
         let mut cf = ChronoFile::open(&path).unwrap();
         // restoring the current latest version changes nothing => no new version
         cf.restore(3).unwrap();
-        assert_eq!(cf.list_versions().unwrap(), 4);
+        assert_eq!(cf.list_versions().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn list_versions_reports_timestamps_in_range() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("file.dat");
+
+        let before = std::time::SystemTime::now();
+        let (path, _expected) = {
+            let mut cf = ChronoFile::create(&path).unwrap();
+            cf.write_all(b"one").unwrap();
+            cf.commit().unwrap();
+            (path, ())
+        };
+        let after = std::time::SystemTime::now();
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+        let versions = cf.list_versions().unwrap();
+        assert_eq!(versions.len(), 1);
+        // commit time falls between the two wall-clock samples (millisecond
+        // resolution, so allow equality)
+        assert!(versions[0].timestamp >= before - std::time::Duration::from_millis(1));
+        assert!(versions[0].timestamp <= after + std::time::Duration::from_millis(1));
+    }
+
+    #[test]
+    fn preview_does_not_touch_main_file() {
+        use std::io::Read;
+
+        let tmp = tempdir().unwrap();
+        let (path, expected) = seed_versions(tmp.path(), 4);
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+
+        // peek at an old version
+        assert_eq!(cf.preview(1).unwrap(), expected[1]);
+        // no new version recorded and the file still holds the latest contents
+        assert_eq!(cf.list_versions().unwrap().len(), 4);
+
+        let mut buf = Vec::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        assert_eq!(buf, expected[3]);
+    }
+
+    #[test]
+    fn preview_out_of_range_errors() {
+        let tmp = tempdir().unwrap();
+        let (path, _expected) = seed_versions(tmp.path(), 3);
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+        let err = cf.preview(99).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn preview_at_future_returns_latest() {
+        let tmp = tempdir().unwrap();
+        let (path, expected) = seed_versions(tmp.path(), 4);
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+        // "as of the future" resolves to the newest version
+        assert_eq!(cf.preview_at(future).unwrap(), *expected.last().unwrap());
+    }
+
+    #[test]
+    fn preview_at_commit_time_reconstructs_that_version_or_later() {
+        let tmp = tempdir().unwrap();
+        let (path, expected) = seed_versions(tmp.path(), 4);
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+        let versions = cf.list_versions().unwrap();
+
+        // "as of version i's commit time" reconstructs version i — or a later
+        // one if several commits share the same millisecond (rposition picks
+        // the latest at-or-before). So the result must be some expected[j>=i].
+        for (i, v) in versions.iter().enumerate() {
+            let got = cf.preview_at(v.timestamp).unwrap();
+            assert!(
+                expected[i..].contains(&got),
+                "as-of version {i} gave contents outside expected[{i}..]"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_at_before_history_errors() {
+        let tmp = tempdir().unwrap();
+        let (path, _expected) = seed_versions(tmp.path(), 3);
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+        // nothing was committed at the Unix epoch
+        let err = cf.preview_at(std::time::UNIX_EPOCH).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn restore_at_future_restores_and_records_latest() {
+        let tmp = tempdir().unwrap();
+        let (path, expected) = seed_versions(tmp.path(), 4);
+
+        let mut cf = ChronoFile::open(&path).unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+
+        let restored = cf.restore_at(future).unwrap();
+        assert_eq!(restored, *expected.last().unwrap());
+        // restoring the already-latest contents is a no-op commit
+        assert_eq!(cf.list_versions().unwrap().len(), 4);
     }
 
     #[test]
