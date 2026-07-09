@@ -1,0 +1,16 @@
+[package]
+name = "chronofile"
+version = "0.1.0"
+edition = "2024"
+name = "tokio"
+authors = ["A Macdonald"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/alixmacdonald10/chronofile"
+description = """
+
+"""
+categories = [""]
+keywords = [""]
+
+[dependencies]
