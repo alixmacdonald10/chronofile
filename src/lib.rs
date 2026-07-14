@@ -241,6 +241,26 @@ impl ChronoFile {
         self.chrono.metadata()
     }
 
+    /// Flushes all in-memory data and metadata for both files to disk.
+    ///
+    /// The `.chrono` log is synced first: it is the source of truth the
+    /// history replays from, so it should reach disk before the derived
+    /// working copy. Returns once both files are durable.
+    pub fn sync_all(&self) -> std::io::Result<()> {
+        self.chrono.sync_all()?;
+        self.file.sync_all()?;
+        Ok(())
+    }
+
+    /// Flushes in-memory data for both files to disk, skipping metadata that
+    /// is not required to read the data back (see [`std::fs::File::sync_data`]).
+    ///
+    /// The `.chrono` log is synced first, for the same reason as [`Self::sync_all`].
+    pub fn sync_data(&self) -> std::io::Result<()> {
+        self.chrono.sync_data()?;
+        self.file.sync_data()?;
+        Ok(())
+    }
 
     /// Reads the entire current contents of the main file.
     ///

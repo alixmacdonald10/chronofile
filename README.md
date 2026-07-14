@@ -134,6 +134,9 @@ Implemented:
 
 - `ChronoFile::create` / `ChronoFile::open`
 - `Read` / `Write` / `Seek` (pass-through to the main file)
+- `metadata` / `chrono_metadata` — filesystem metadata for the main and
+  `.chrono` files
+- `sync_all` / `sync_data` — flush both files to disk (`.chrono` first)
 - `commit()` — record a version, returns the version id (`None` if unchanged)
 - `History::list_versions` — every version with its id and commit timestamp
 - `History::preview` / `preview_at` — reconstruct a version's contents without
@@ -145,7 +148,7 @@ Implemented:
 ## Roadmap
 
 - Richer version metadata (messages, tags) beyond id + timestamp.
-- `sync_all` and other `File` parity methods.
+- `set_len`, `set_permissions`, `try_clone` and other `File` parity methods.
 - Integrity checksums to detect corruption on read.
 - Periodic full snapshots to cut replay time on long histories.
 - Indexing for fast random access to diffs.
