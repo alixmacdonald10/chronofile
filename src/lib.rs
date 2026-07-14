@@ -907,4 +907,53 @@ mod tests {
         let err = cf.restore(expected.len() as u64).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
+
+    #[test]
+    fn metadata_and_chrono_metadata_target_separate_files() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("file.dat");
+
+        // Write to the main file and commit so the two files differ in size,
+        // proving chrono_metadata reads the .chrono log, not the main file.
+        let mut cf = ChronoFile::create(&path).unwrap();
+        cf.write_all(b"main-file-contents").unwrap();
+        cf.commit().unwrap();
+
+        let main = cf.metadata().unwrap();
+        let chrono = cf.chrono_metadata().unwrap();
+
+        assert!(main.is_file());
+        assert!(chrono.is_file());
+        assert_ne!(main.len(), chrono.len());
+    }
+
+    #[test]
+    fn set_len_truncate_then_commit_records_empty() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("file.dat");
+
+        let mut cf = ChronoFile::create(&path).unwrap();
+        cf.write_all(b"some contents").unwrap();
+        cf.commit().unwrap(); // version 0: non-empty
+
+        cf.set_len(0).unwrap();
+        let id = cf.commit().unwrap().expect("truncation is a change");
+
+        assert_eq!(cf.preview(id).unwrap(), b"");
+    }
+
+    #[test]
+    fn set_len_extend_then_commit_records_zero_fill() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("file.dat");
+
+        let mut cf = ChronoFile::create(&path).unwrap();
+        cf.write_all(b"abc").unwrap();
+        cf.commit().unwrap(); // version 0: "abc"
+
+        cf.set_len(6).unwrap(); // extend: "abc" + three zero bytes
+        let id = cf.commit().unwrap().expect("extension is a change");
+
+        assert_eq!(cf.preview(id).unwrap(), b"abc\0\0\0");
+    }
 }
