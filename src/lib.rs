@@ -262,6 +262,17 @@ impl ChronoFile {
         Ok(())
     }
 
+    /// Truncates or extends the main file, exactly like
+    /// [`std::fs::File::set_len`].
+    ///
+    /// Like [`write`](std::io::Write::write), this changes the file's bytes but
+    /// records no version — call [`commit`](Self::commit) to capture the new
+    /// length in history. Only the main file is affected; the `.chrono` log is
+    /// untouched.
+    pub fn set_len(&self, size: u64) -> std::io::Result<()> {
+        self.file.set_len(size)
+    }
+
     /// Reads the entire current contents of the main file.
     ///
     /// The cursor is rewound to the start first, so the full file is returned
