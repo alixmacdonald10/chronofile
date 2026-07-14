@@ -3,7 +3,7 @@
 
 use std::{
     ffi::OsString,
-    fs::OpenOptions,
+    fs::{Metadata, OpenOptions},
     io::{Read, Seek, Write},
     path::{Path, PathBuf},
 };
@@ -227,6 +227,20 @@ impl ChronoFile {
 
         (path.to_owned(), chrono_path)
     }
+
+
+    /// Returns filesystem [`Metadata`] for the main file (the current,
+    /// working copy that reads and writes act on).
+    pub fn metadata(&self) -> std::io::Result<Metadata> {
+        self.file.metadata()
+    }
+
+    /// Returns filesystem [`Metadata`] for the backing `.chrono` file (the
+    /// append-only patch log holding the version history).
+    pub fn chrono_metadata(&self) -> std::io::Result<Metadata> {
+        self.chrono.metadata()
+    }
+
 
     /// Reads the entire current contents of the main file.
     ///

@@ -145,7 +145,7 @@ Implemented:
 ## Roadmap
 
 - Richer version metadata (messages, tags) beyond id + timestamp.
-- `sync_all` / `metadata` and other `File` parity methods.
+- `sync_all` and other `File` parity methods.
 - Integrity checksums to detect corruption on read.
 - Periodic full snapshots to cut replay time on long histories.
 - Indexing for fast random access to diffs.
