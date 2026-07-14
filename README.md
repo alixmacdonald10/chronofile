@@ -133,7 +133,7 @@ files).
 Implemented:
 
 - `ChronoFile::create` / `ChronoFile::open`
-- `Read` / `Write` (pass-through to the main file)
+- `Read` / `Write` / `Seek` (pass-through to the main file)
 - `commit()` — record a version, returns the version id (`None` if unchanged)
 - `History::list_versions` — every version with its id and commit timestamp
 - `History::preview` / `preview_at` — reconstruct a version's contents without
@@ -145,7 +145,6 @@ Implemented:
 ## Roadmap
 
 - Richer version metadata (messages, tags) beyond id + timestamp.
-- `Seek` impl for full `std::fs::File` parity.
 - `sync_all` / `metadata` and other `File` parity methods.
 - Integrity checksums to detect corruption on read.
 - Periodic full snapshots to cut replay time on long histories.

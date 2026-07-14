@@ -343,6 +343,19 @@ impl std::io::Read for ChronoFile {
     }
 }
 
+impl std::io::Seek for ChronoFile {
+    /// Seeks within the underlying file, exactly like [`std::fs::File`].
+    ///
+    /// This moves the shared file cursor that [`Read`] and [`Write`] use; the
+    /// version history is untouched. The [`Seek`] trait's other methods
+    /// ([`rewind`](std::io::Seek::rewind),
+    /// [`stream_position`](std::io::Seek::stream_position)) come for free —
+    /// they default to calling this.
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.file.seek(pos)
+    }
+}
+
 impl History for ChronoFile {
     fn list_versions(&mut self) -> std::io::Result<Vec<VersionInfo>> {
         let patches = self.load_patches()?;
