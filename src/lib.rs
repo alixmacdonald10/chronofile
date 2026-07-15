@@ -348,6 +348,7 @@ impl ChronoFile {
     /// cannot be encoded or written.
     pub fn commit(&mut self) -> std::io::Result<Option<u64>> {
         let current = self.read_current_data()?;
+        let file_checksum = crc32fast::hash(&current);
 
         // no-op: nothing changed since the last commit
         if current == self.snapshot {
@@ -357,7 +358,7 @@ impl ChronoFile {
         let patch_bytes = diffy::create_patch_bytes(&self.snapshot, &current).to_bytes();
 
         let mut patches = self.load_patches()?;
-        patches.push(patch_bytes, now_ms());
+        patches.push(patch_bytes, now_ms(), file_checksum);
         let id = patches.len() as u64 - 1;
         self.write_log(&patches)?;
 
@@ -570,8 +571,8 @@ mod tests {
     #[test]
     fn patches_bincode_roundtrip() {
         let mut patches = Patches::default();
-        patches.push(b"patch-one".to_vec(), 111);
-        patches.push(b"patch-two".to_vec(), 222);
+        patches.push(b"patch-one".to_vec(), 111, 0);
+        patches.push(b"patch-two".to_vec(), 222, 0);
 
         let encoded = bincode2::serialize(&patches).unwrap();
         let decoded: Patches = bincode2::deserialize(&encoded[..]).unwrap();
@@ -588,7 +589,11 @@ mod tests {
         // seed a valid, replayable encoded log (open replays it on open, so
         // each patch must parse and apply from an empty base)
         let mut patches = Patches::default();
-        patches.push(diffy::create_patch_bytes(b"", b"content\n").to_bytes(), 0);
+        patches.push(
+            diffy::create_patch_bytes(b"", b"content\n").to_bytes(),
+            0,
+            crc32fast::hash(b"content\n"),
+        );
         let encoded = bincode2::serialize(&patches).unwrap();
 
         std::fs::File::create(&path).unwrap();

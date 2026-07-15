@@ -18,6 +18,8 @@ pub(crate) struct Entry {
     /// The [`diffy`] patch (its byte serialization) from the previous version
     /// to this one.
     pub(crate) patch: Vec<u8>,
+    /// The checksum of the expected fully reconstructed file at this Entry
+    pub(crate) file_checksum: u32,
 }
 
 /// An ordered log of per-version diffs.
@@ -51,8 +53,12 @@ impl Patches {
 
     /// Appends a patch (its `diffy` byte serialization) as the newest version,
     /// stamped with `timestamp_ms` (milliseconds since the Unix epoch).
-    pub(crate) fn push(&mut self, patch: Vec<u8>, timestamp_ms: u64) {
-        self.0.push(Entry { timestamp_ms, patch });
+    pub(crate) fn push(&mut self, patch: Vec<u8>, timestamp_ms: u64, file_checksum: u32) {
+        self.0.push(Entry {
+            timestamp_ms,
+            patch,
+            file_checksum,
+        });
     }
 
     /// Number of recorded versions.
@@ -67,6 +73,16 @@ impl Patches {
         for entry in &self.0 {
             let patch = diffy::Patch::from_bytes(&entry.patch).map_err(invalid_data)?;
             data = diffy::apply_bytes(&data, &patch).map_err(invalid_data)?;
+            // calculate the entry checksum and ensure it matches
+            if crc32fast::hash(&data) != entry.file_checksum {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Checksum integrity checks failed for entry at timestamp {}. Data is corrupted",
+                        entry.timestamp_ms
+                    ),
+                ));
+            }
         }
         Ok(data)
     }
@@ -117,7 +133,11 @@ mod tests {
         let mut prev = Vec::new();
         for i in 0..n {
             let next = cumulative(i);
-            patches.push(diffy::create_patch_bytes(&prev, &next).to_bytes(), i as u64);
+            patches.push(
+                diffy::create_patch_bytes(&prev, &next).to_bytes(),
+                i as u64,
+                crc32fast::hash(&next),
+            );
             prev = next;
         }
         patches
@@ -131,8 +151,8 @@ mod tests {
     #[test]
     fn encode_decode_roundtrip() {
         let mut patches = Patches::default();
-        patches.push(b"one".to_vec(), 100);
-        patches.push(b"two".to_vec(), 200);
+        patches.push(b"one".to_vec(), 100, 0);
+        patches.push(b"two".to_vec(), 200, 0);
 
         let encoded = patches.encode().unwrap();
         assert_eq!(Patches::decode(&encoded).unwrap(), patches);
@@ -148,8 +168,8 @@ mod tests {
     fn push_and_len() {
         let mut patches = Patches::default();
         assert_eq!(patches.len(), 0);
-        patches.push(b"p".to_vec(), 1);
-        patches.push(b"q".to_vec(), 2);
+        patches.push(b"p".to_vec(), 1, 0);
+        patches.push(b"q".to_vec(), 2, 0);
         assert_eq!(patches.len(), 2);
     }
 
@@ -194,7 +214,7 @@ mod tests {
         // build_log's first timestamp is 0, so nothing is strictly before it;
         // use a log that starts later to exercise the None path
         let mut later = Patches::default();
-        later.push(b"p".to_vec(), 50);
+        later.push(b"p".to_vec(), 50, 0);
         assert!(later.filter(Select::AsOf(49)).is_none());
     }
 
@@ -217,5 +237,51 @@ mod tests {
             let data = Patches(entries.to_vec()).replay().unwrap();
             assert_eq!(data, cumulative(v), "version {v} mismatch");
         }
+    }
+
+    #[test]
+    fn replay_valid_log_passes_checksums() {
+        // A log built with correct checksums must replay cleanly through the
+        // integrity gate — no false positives.
+        let patches = build_log(5);
+        assert_eq!(patches.replay().unwrap(), cumulative(4));
+    }
+
+    #[test]
+    fn replay_detects_corrupted_checksum() {
+        // A stored checksum that no longer matches the reconstructed data is
+        // reported as corruption rather than returning wrong contents.
+        let mut patches = build_log(5);
+        patches.0[2].file_checksum ^= 1;
+
+        let err = patches.replay().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn replay_detects_tampered_content() {
+        // Tamper with a patch so it reconstructs different bytes than its
+        // recorded checksum expects: the checksum still describes the original
+        // version, so replay must reject the mutated data.
+        let mut patches = build_log(5);
+        // Entry 2's base is version 1 (cumulative(1)); swap its patch for one
+        // that produces bogus content while leaving file_checksum untouched.
+        let bogus = b"tampered\n".to_vec();
+        patches.0[2].patch = diffy::create_patch_bytes(&cumulative(1), &bogus).to_bytes();
+
+        let err = patches.replay().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn checksum_survives_encode_decode() {
+        // The per-entry checksum is part of the on-disk encoding and must round
+        // trip so integrity can be verified after a reload.
+        let mut patches = Patches::default();
+        let checksum = crc32fast::hash(b"payload");
+        patches.push(b"payload".to_vec(), 7, checksum);
+
+        let decoded = Patches::decode(&patches.encode().unwrap()).unwrap();
+        assert_eq!(decoded.0[0].file_checksum, checksum);
     }
 }
