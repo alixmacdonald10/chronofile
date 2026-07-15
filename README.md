@@ -42,11 +42,19 @@ file keeps working — you add `commit()` at the points that mark a version.
 
 A version is created only when you call [`commit`](#versions-are-explicit). Each
 commit diffs the current contents against the previous commit and appends the
-patch to the `.chrono` log. Both `preview` and `restore` reconstruct a version
-by replaying patches from the start up to the target — `preview` returns those
-bytes read-only (the working file is untouched), while `restore` also rewrites
-the main file and records the restore as a new version (so the restore itself
-is part of the history and becomes the baseline for the next `commit`).
+patch to the `.chrono` log, tagged with a CRC32 checksum of the full contents at
+that version. Both `preview` and `restore` reconstruct a version by replaying
+patches from the start up to the target — `preview` returns those bytes
+read-only (the working file is untouched), while `restore` also rewrites the
+main file and records the restore as a new version (so the restore itself is
+part of the history and becomes the baseline for the next `commit`).
+
+As each patch is replayed, the reconstructed contents are checksummed against
+the value recorded at commit time; a mismatch means the `.chrono` log has been
+corrupted and the operation fails with an
+[`InvalidData`](https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidData)
+error rather than returning silently wrong bytes. See
+[Integrity and recovery](#integrity-and-recovery).
 
 ## Versions Are Explicit
 
@@ -128,6 +136,29 @@ file for **read + write** and creates the `.chrono` companion if missing — a
 exist; `create` makes a new one (truncating any existing main and `.chrono`
 files).
 
+### Integrity and recovery
+
+Every committed version stores a CRC32 checksum of its full contents. Because
+`open`, `preview`, and `restore` all replay the log, a corrupted `.chrono` file
+is caught the moment its bytes no longer reconstruct the recorded checksum —
+those calls return an `InvalidData` error instead of handing back wrong data.
+
+**Your current data is not lost when this happens.** The main file (`file.dat`)
+always holds the live bytes independently of the log, so it stays readable even
+when the history cannot be replayed:
+
+- **Read the current contents directly.** Open `file.dat` with a plain
+  [`std::fs::File`] — it is untouched by the corruption and holds the latest
+  committed (and any uncommitted) bytes.
+- **Reset the history.** Delete the companion `.chrono` file. The next
+  `ChronoFile::open` recreates an empty log, so the file is usable again and new
+  commits start a fresh history. The old version history is gone, but the
+  current file contents are preserved.
+
+Do **not** reach for `ChronoFile::create` to recover: it truncates the *main*
+file as well as the `.chrono` log, discarding your current data. There is no
+in-library repair or partial-salvage API yet (see roadmap).
+
 ## Status
 
 Implemented:
@@ -145,12 +176,17 @@ Implemented:
 - `History::restore` / `restore_at` — replay the log to reconstruct a version
   (by id or as of a time), rewrite the file, and record the restore as a new
   version
+- Integrity checksums — a per-version CRC32 verified on replay; a corrupt
+  `.chrono` log fails with `InvalidData` instead of returning wrong data (see
+  [Integrity and recovery](#integrity-and-recovery))
 
 ## Roadmap
 
 - Richer version metadata (messages, tags) beyond id + timestamp.
 - `set_permissions`, `try_clone` and other `File` parity methods.
-- Integrity checksums to detect corruption on read.
+- History repair/recovery API — salvage or truncate a corrupt log in-library
+  (drop bad tail entries, rebuild from the last valid version) instead of
+  deleting the `.chrono` file by hand.
 - Periodic full snapshots to cut replay time on long histories.
 - Indexing for fast random access to diffs.
 - Optional compression (`zstd`, `lz4`) for diffs.
