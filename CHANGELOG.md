@@ -1,6 +1,19 @@
 # Changelog
 
 
+### Bug Fixes
+
+- Added tests for new methods
+
+### Features
+
+- Added set_len to ChronoFile
+- Added file integrity checks using crc32fast hasher
+
+### Chores
+
+- Update CHANGELOG.md for 0.1.2
+
 ### Features
 
 - Added functions for accessing metadata of file and chronofile
