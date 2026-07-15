@@ -1,9 +1,17 @@
 # Changelog
 
 
+### Features
+
+- Added zlib compression to .chrono file
+
 ### Bug Fixes
 
 - Added tests for new methods
+
+### Chores
+
+- Update CHANGELOG.md for 0.2.0
 
 ### Features
 
