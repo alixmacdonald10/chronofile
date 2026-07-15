@@ -3,6 +3,8 @@
 
 //! The versioned patch log stored in the companion `.chrono` file.
 
+use yazi::{Adler32, CompressionLevel, Format};
+
 /// Wraps a decode/encode/patch error from a dependency in an
 /// [`io::Error`](std::io::Error) so the public API only ever yields I/O errors,
 /// never panics — matching [`std::fs::File`], which never panics on a bad read.
@@ -42,13 +44,25 @@ impl Patches {
         if bytes.is_empty() {
             Ok(Self::default())
         } else {
-            bincode2::deserialize(bytes).map_err(invalid_data)
+            let (decompressed, checksum) = yazi::decompress(bytes, Format::Zlib)
+                .map_err(|e| invalid_data(format!("decompressing chrono log: {e:?}")))?;
+            // Zlib streams carry an Adler-32 trailer; verify the decompressed
+            // bytes against it. `None` (a checksum-less format) or a mismatch is
+            // treated as corruption rather than trusting the data.
+            if checksum != Some(Adler32::from_buf(&decompressed).finish()) {
+                return Err(invalid_data(
+                    "checksum of the decompressed chrono file does not match",
+                ));
+            }
+            bincode2::deserialize(&decompressed).map_err(invalid_data)
         }
     }
 
     /// Encodes the log to its compact on-disk form.
     pub(crate) fn encode(&self) -> std::io::Result<Vec<u8>> {
-        bincode2::serialize(self).map_err(invalid_data)
+        let encoded = bincode2::serialize(self).map_err(invalid_data)?;
+        yazi::compress(&encoded, Format::Zlib, CompressionLevel::Default)
+            .map_err(|e| invalid_data(format!("compressing chrono log: {e:?}")))
     }
 
     /// Appends a patch (its `diffy` byte serialization) as the newest version,
@@ -283,5 +297,33 @@ mod tests {
 
         let decoded = Patches::decode(&patches.encode().unwrap()).unwrap();
         assert_eq!(decoded.0[0].file_checksum, checksum);
+    }
+
+    #[test]
+    fn encode_compresses_the_log() {
+        // The on-disk form is zlib-compressed, so a repetitive log encodes
+        // smaller than its raw bincode serialization.
+        let patches = build_log(20);
+        let encoded = patches.encode().unwrap();
+        let raw = bincode2::serialize(&patches).unwrap();
+        assert!(
+            encoded.len() < raw.len(),
+            "expected compressed {} < raw {}",
+            encoded.len(),
+            raw.len()
+        );
+    }
+
+    #[test]
+    fn decode_rejects_corrupted_compressed_blob() {
+        // Flipping a byte inside a valid compressed stream must fail gracefully
+        // (bad zlib frame or Adler-32 mismatch) rather than panicking or
+        // returning wrong data.
+        let mut encoded = build_log(5).encode().unwrap();
+        let mid = encoded.len() / 2;
+        encoded[mid] ^= 0xff;
+
+        let err = Patches::decode(&encoded).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

@@ -37,8 +37,9 @@ file keeps working — you add `commit()` at the points that mark a version.
 
 - **Main file** (`file.dat`) — always holds the current bytes. Reads and writes
   go straight to it, exactly like `std::fs::File`.
-- **Chrono file** (`file.dat.chrono`) — a compact binary log (bincode-encoded)
-  of per-version diffs computed with [`diffy`].
+- **Chrono file** (`file.dat.chrono`) — a compact binary log of per-version
+  diffs computed with [`diffy`], serialized with bincode and then
+  zlib-compressed (via [`yazi`]) so the whole log is stored packed on disk.
 
 A version is created only when you call [`commit`](#versions-are-explicit). Each
 commit diffs the current contents against the previous commit and appends the
@@ -138,10 +139,17 @@ files).
 
 ### Integrity and recovery
 
-Every committed version stores a CRC32 checksum of its full contents. Because
-`open`, `preview`, and `restore` all replay the log, a corrupted `.chrono` file
-is caught the moment its bytes no longer reconstruct the recorded checksum —
-those calls return an `InvalidData` error instead of handing back wrong data.
+Integrity is checked at two layers, both surfacing as `InvalidData` errors
+rather than panics or silently wrong data:
+
+- **The compressed log** carries a zlib Adler-32 checksum. On read, the
+  `.chrono` bytes are decompressed and verified before anything else; a rotted
+  or truncated file fails to decompress (or mismatches its checksum) and is
+  rejected up front.
+- **Each committed version** additionally stores a CRC32 of its full contents.
+  Because `open`, `preview`, and `restore` all replay the log, any corruption
+  that survived the compression layer is caught the moment the replayed bytes
+  no longer reconstruct the recorded checksum.
 
 **Your current data is not lost when this happens.** The main file (`file.dat`)
 always holds the live bytes independently of the log, so it stays readable even
@@ -176,9 +184,11 @@ Implemented:
 - `History::restore` / `restore_at` — replay the log to reconstruct a version
   (by id or as of a time), rewrite the file, and record the restore as a new
   version
-- Integrity checksums — a per-version CRC32 verified on replay; a corrupt
-  `.chrono` log fails with `InvalidData` instead of returning wrong data (see
+- Integrity checksums — a per-version CRC32 verified on replay, plus the
+  compressed log's zlib Adler-32; a corrupt `.chrono` log fails with
+  `InvalidData` instead of returning wrong data (see
   [Integrity and recovery](#integrity-and-recovery))
+- Compression — the whole `.chrono` log is zlib-compressed on disk
 
 ## Roadmap
 
@@ -189,7 +199,6 @@ Implemented:
   deleting the `.chrono` file by hand.
 - Periodic full snapshots to cut replay time on long histories.
 - Indexing for fast random access to diffs.
-- Optional compression (`zstd`, `lz4`) for diffs.
 - Pluggable diff algorithms (`bsdiff`, `xdelta3`, rolling hash).
 - Streaming API for large files.
 - Concurrency support via file locks.
@@ -213,3 +222,4 @@ dual licensed as above, without any additional terms or conditions.
 [`std::fs::File`]: https://doc.rust-lang.org/std/fs/struct.File.html
 [`std::fs::File::open`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.open
 [`diffy`]: https://crates.io/crates/diffy
+[`yazi`]: https://crates.io/crates/yazi

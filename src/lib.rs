@@ -228,7 +228,6 @@ impl ChronoFile {
         (path.to_owned(), chrono_path)
     }
 
-
     /// Returns filesystem [`Metadata`] for the main file (the current,
     /// working copy that reads and writes act on).
     pub fn metadata(&self) -> std::io::Result<Metadata> {
@@ -594,7 +593,7 @@ mod tests {
             0,
             crc32fast::hash(b"content\n"),
         );
-        let encoded = bincode2::serialize(&patches).unwrap();
+        let encoded = patches.encode().unwrap();
 
         std::fs::File::create(&path).unwrap();
         std::fs::write(&chrono_path, &encoded).unwrap();
@@ -617,7 +616,7 @@ mod tests {
         assert_eq!(cf.commit().unwrap(), Some(0));
 
         let encoded = std::fs::read(&chrono_path).unwrap();
-        let patches: Patches = bincode2::deserialize(&encoded[..]).unwrap();
+        let patches = Patches::decode(&encoded).unwrap();
         assert_eq!(patches.0.len(), 1);
     }
 
@@ -647,7 +646,7 @@ mod tests {
         assert_eq!(cf.commit().unwrap(), Some(0));
 
         let encoded = std::fs::read(&chrono_path).unwrap();
-        let patches: Patches = bincode2::deserialize(&encoded[..]).unwrap();
+        let patches = Patches::decode(&encoded).unwrap();
         assert_eq!(patches.0.len(), 1);
     }
 
@@ -673,7 +672,7 @@ mod tests {
         }
 
         let encoded = std::fs::read(&chrono_path).unwrap();
-        let patches: Patches = bincode2::deserialize(&encoded[..]).unwrap();
+        let patches = Patches::decode(&encoded).unwrap();
 
         // one patch per commit
         assert_eq!(patches.0.len(), expected.len());
