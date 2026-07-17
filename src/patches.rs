@@ -3,13 +3,15 @@
 
 //! The versioned patch log stored in the companion `.chrono` file.
 
+use std::io;
+
 use yazi::{Adler32, CompressionLevel, Format};
 
 /// Wraps a decode/encode/patch error from a dependency in an
-/// [`io::Error`](std::io::Error) so the public API only ever yields I/O errors,
+/// [`io::Error`] so the public API only ever yields I/O errors,
 /// never panics — matching [`std::fs::File`], which never panics on a bad read.
-pub(crate) fn invalid_data<E: std::fmt::Display>(err: E) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string())
+pub(crate) fn invalid_data<E: std::fmt::Display>(err: E) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }
 
 /// One recorded version: the diff that produces it plus when it was committed.
@@ -20,7 +22,7 @@ pub(crate) struct Entry {
     /// The [`diffy`] patch (its byte serialization) from the previous version
     /// to this one.
     pub(crate) patch: Vec<u8>,
-    /// The checksum of the expected fully reconstructed file at this Entry
+    /// checksum of the fully reconstructed file expected at this entry.
     pub(crate) file_checksum: u32,
 }
 
@@ -40,7 +42,7 @@ impl Patches {
     /// log; a non-empty but corrupt buffer yields an
     /// [`InvalidData`](std::io::ErrorKind::InvalidData) error rather than
     /// panicking.
-    pub(crate) fn decode(bytes: &[u8]) -> std::io::Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> io::Result<Self> {
         if bytes.is_empty() {
             Ok(Self::default())
         } else {
@@ -59,7 +61,7 @@ impl Patches {
     }
 
     /// Encodes the log to its compact on-disk form.
-    pub(crate) fn encode(&self) -> std::io::Result<Vec<u8>> {
+    pub(crate) fn encode(&self) -> io::Result<Vec<u8>> {
         let encoded = bincode2::serialize(self).map_err(invalid_data)?;
         yazi::compress(&encoded, Format::Zlib, CompressionLevel::Default)
             .map_err(|e| invalid_data(format!("compressing chrono log: {e:?}")))
@@ -80,19 +82,32 @@ impl Patches {
         self.0.len()
     }
 
+    /// The recorded version entries, oldest first.
+    pub(crate) fn entries(&self) -> &[Entry] {
+        &self.0
+    }
+
     /// Reconstructs the latest contents by replaying every patch in order onto
     /// an empty buffer.
-    pub(crate) fn replay(&self) -> std::io::Result<Vec<u8>> {
+    pub(crate) fn replay(&self) -> io::Result<Vec<u8>> {
+        Self::replay_entries(&self.0)
+    }
+
+    /// Reconstructs contents by replaying `entries` in order onto an empty
+    /// buffer. Takes a slice so callers can replay a prefix (see
+    /// [`filter`](Patches::filter)) without cloning the entries into a new
+    /// [`Patches`].
+    pub(crate) fn replay_entries(entries: &[Entry]) -> io::Result<Vec<u8>> {
         let mut data = Vec::new();
-        for entry in &self.0 {
+        for entry in entries {
             let patch = diffy::Patch::from_bytes(&entry.patch).map_err(invalid_data)?;
             data = diffy::apply_bytes(&data, &patch).map_err(invalid_data)?;
             // calculate the entry checksum and ensure it matches
             if crc32fast::hash(&data) != entry.file_checksum {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
                     format!(
-                        "Checksum integrity checks failed for entry at timestamp {}. Data is corrupted",
+                        "checksum mismatch for entry at timestamp {} — data is corrupted",
                         entry.timestamp_ms
                     ),
                 ));
