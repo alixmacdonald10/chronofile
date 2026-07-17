@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 A Macdonald
 
+#![deny(clippy::pedantic)]
+
 mod chrono_file;
 mod patches;
 mod utils;
@@ -19,6 +21,10 @@ pub trait History {
     /// or [`restore`](History::restore).
     ///
     /// Returns an empty vec when nothing has been committed yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the `.chrono` log cannot be read or decoded.
     fn list_versions(&mut self) -> io::Result<Vec<VersionInfo>>;
 
     /// Returns the file's contents as of `version` **without touching the main

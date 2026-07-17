@@ -11,7 +11,8 @@ pub(crate) fn now_ms() -> u64 {
 /// A [`SystemTime`](std::time::SystemTime) as milliseconds since the Unix
 /// epoch. Times before 1970 clamp to 0.
 pub(crate) fn to_ms(time: std::time::SystemTime) -> u64 {
+    // Truncation needs a duration of ~584 million years — unreachable.
+    #[allow(clippy::cast_possible_truncation)]
     time.duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }

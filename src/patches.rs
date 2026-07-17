@@ -134,6 +134,7 @@ impl Patches {
 }
 
 /// Picks which recorded version [`Patches::filter`] resolves to.
+#[derive(Clone, Copy)]
 pub(crate) enum Select {
     /// A zero-based version id.
     Version(usize),

@@ -142,12 +142,20 @@ impl ChronoFile {
 
     /// Returns filesystem [`Metadata`] for the main file (the current,
     /// working copy that reads and writes act on).
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the main file's metadata cannot be read.
     pub fn metadata(&self) -> io::Result<Metadata> {
         self.file.metadata()
     }
 
     /// Returns filesystem [`Metadata`] for the backing `.chrono` file (the
     /// append-only patch log holding the version history).
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the `.chrono` file's metadata cannot be read.
     pub fn chrono_metadata(&self) -> io::Result<Metadata> {
         self.chrono.metadata()
     }
@@ -157,6 +165,10 @@ impl ChronoFile {
     /// The `.chrono` log is synced first: it is the source of truth the
     /// history replays from, so it should reach disk before the derived
     /// working copy. Returns once both files are durable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if either file cannot be synced to disk.
     pub fn sync_all(&self) -> io::Result<()> {
         self.chrono.sync_all()?;
         self.file.sync_all()?;
@@ -167,6 +179,10 @@ impl ChronoFile {
     /// is not required to read the data back (see [`std::fs::File::sync_data`]).
     ///
     /// The `.chrono` log is synced first, for the same reason as [`Self::sync_all`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if either file's data cannot be synced to disk.
     pub fn sync_data(&self) -> io::Result<()> {
         self.chrono.sync_data()?;
         self.file.sync_data()?;
@@ -180,6 +196,10 @@ impl ChronoFile {
     /// records no version — call [`commit`](Self::commit) to capture the new
     /// length in history. Only the main file is affected; the `.chrono` log is
     /// untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the main file cannot be resized.
     pub fn set_len(&self, size: u64) -> io::Result<()> {
         self.file.set_len(size)
     }
@@ -355,7 +375,7 @@ impl History for ChronoFile {
     }
 
     fn preview(&mut self, version: u64) -> io::Result<Vec<u8>> {
-        self.reconstruct(Select::Version(version as usize))
+        self.reconstruct(Select::Version(usize::try_from(version).unwrap_or(usize::MAX)))
     }
 
     fn preview_at(&mut self, time: SystemTime) -> io::Result<Vec<u8>> {
@@ -363,7 +383,7 @@ impl History for ChronoFile {
     }
 
     fn restore(&mut self, version: u64) -> io::Result<Vec<u8>> {
-        let data = self.reconstruct(Select::Version(version as usize))?;
+        let data = self.reconstruct(Select::Version(usize::try_from(version).unwrap_or(usize::MAX)))?;
         self.apply(data)
     }
 
@@ -438,9 +458,8 @@ mod tests {
         let chrono_path = tmp.path().join("file.dat.chrono");
 
         // File missing: open fails and chrono must NOT be created.
-        let err = match ChronoFile::open(&path) {
-            Ok(_) => panic!("expected open to fail"),
-            Err(err) => err,
+        let Err(err) = ChronoFile::open(&path) else {
+            panic!("expected open to fail");
         };
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(!chrono_path.exists());
@@ -591,8 +610,8 @@ mod tests {
         // contents.
         let mut data: Vec<u8> = Vec::new();
         for (i, entry) in patches.0.iter().enumerate() {
-            let patch = diffy::Patch::from_bytes(&entry.patch).unwrap();
-            data = diffy::apply_bytes(&data, &patch).unwrap();
+            let parsed = diffy::Patch::from_bytes(&entry.patch).unwrap();
+            data = diffy::apply_bytes(&data, &parsed).unwrap();
             assert_eq!(data, expected[i], "patch {i} out of order");
         }
     }
@@ -758,7 +777,7 @@ mod tests {
         let (path, expected) = seed_versions(tmp.path(), 4);
 
         let mut cf = ChronoFile::open(&path).unwrap();
-        let future = SystemTime::now() + Duration::from_secs(3600);
+        let future = SystemTime::now() + Duration::from_hours(1);
         // "as of the future" resolves to the newest version
         assert_eq!(cf.preview_at(future).unwrap(), *expected.last().unwrap());
     }
@@ -800,7 +819,7 @@ mod tests {
         let (path, expected) = seed_versions(tmp.path(), 4);
 
         let mut cf = ChronoFile::open(&path).unwrap();
-        let future = SystemTime::now() + Duration::from_secs(3600);
+        let future = SystemTime::now() + Duration::from_hours(1);
 
         let restored = cf.restore_at(future).unwrap();
         assert_eq!(restored, *expected.last().unwrap());

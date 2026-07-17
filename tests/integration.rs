@@ -134,7 +134,7 @@ fn preview_does_not_mutate_working_copy() {
     assert_eq!(std::fs::read(&path).unwrap(), b"alpha-beta");
 }
 
-/// Out-of-range selectors surface as InvalidInput, not a panic.
+/// Out-of-range selectors surface as `InvalidInput`, not a panic.
 #[test]
 fn out_of_range_version_errors() {
     let tmp = tempdir().unwrap();
@@ -169,7 +169,7 @@ fn time_travel_by_timestamp() {
     assert_eq!(cf.preview_at(commit_time).unwrap(), b"start");
 
     // far in the future => newest version
-    let future = SystemTime::now() + Duration::from_secs(3600);
+    let future = SystemTime::now() + Duration::from_hours(1);
     assert_eq!(cf.preview_at(future).unwrap(), b"start");
 
     // before any commit => InvalidInput
@@ -200,7 +200,7 @@ fn seek_overwrite_then_commit() {
     assert_eq!(cf.preview(0).unwrap(), b"AAAAA");
 }
 
-/// set_len truncation and extension are ordinary byte changes a commit records.
+/// `set_len` truncation and extension are ordinary byte changes a commit records.
 #[test]
 fn set_len_changes_are_versioned() {
     let tmp = tempdir().unwrap();
@@ -240,7 +240,7 @@ fn metadata_and_sync() {
     cf.sync_all().unwrap();
 }
 
-/// A fresh ChronoFile has no versions.
+/// A fresh `ChronoFile` has no versions.
 #[test]
 fn new_file_has_no_versions() {
     let tmp = tempdir().unwrap();
