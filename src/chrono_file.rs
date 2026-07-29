@@ -3,7 +3,7 @@
 
 use std::{
     ffi::OsString,
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, Metadata, OpenOptions, Permissions},
     io::{self, Read, Seek, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -148,6 +148,20 @@ impl ChronoFile {
     /// Returns an I/O error if the main file's metadata cannot be read.
     pub fn metadata(&self) -> io::Result<Metadata> {
         self.file.metadata()
+    }
+
+    /// Changes the permissions on the underlying file, chronofile permissions remain.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the user lacks permission change
+    /// attributes on the underlying file. It may also return an error in other
+    /// os-specific unspecified cases.
+    ///
+    /// Note that this method alters the permissions of the underlying file,
+    /// even though it takes `&self` rather than `&mut self`. 
+    pub fn set_permissions(&self, perm: Permissions) -> io::Result<()> {
+        self.file.set_permissions(perm)
     }
 
     /// Returns filesystem [`Metadata`] for the backing `.chrono` file (the

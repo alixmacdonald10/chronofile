@@ -193,7 +193,6 @@ Implemented:
 ## Roadmap
 
 - Richer version metadata (messages, tags) beyond id + timestamp.
-- `set_permissions`, `try_clone` and other `File` parity methods.
 - History repair/recovery API — salvage or truncate a corrupt log in-library
   (drop bad tail entries, rebuild from the last valid version) instead of
   deleting the `.chrono` file by hand.
@@ -201,8 +200,7 @@ Implemented:
 - Indexing for fast random access to diffs.
 - Pluggable diff algorithms (`bsdiff`, `xdelta3`, rolling hash).
 - Streaming API for large files.
-- Concurrency support via file locks.
-- Optional encryption for diffs.
+- Concurrency support via file locks and `try_clone`.
 
 ## License
 
