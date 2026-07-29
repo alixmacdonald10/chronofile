@@ -1,6 +1,20 @@
 # Changelog
 
 
+### Chores
+
+- Refactor
+- Fixed pedantic lints
+
+### Features
+
+- Added integration tests
+- Added set_permissions file parity method
+
+### Chores
+
+- Update CHANGELOG.md for 0.3.0
+
 ### Features
 
 - Added zlib compression to .chrono file
