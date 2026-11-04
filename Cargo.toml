@@ -6,16 +6,17 @@ authors = ["A Macdonald"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/alixmacdonald10/chronofile"
-description = "A time-travelable file for Rust: implements Read and Write for the latest version while storing versioned diffs in a companion .chrono file to restore any previous version."
+description = "A time-travelable file for Rust: a drop-in std::fs::File that keeps compressed full-version snapshots in a companion .chrono file."
 categories = ["data-structures", "encoding"]
-keywords = ["versioning", "diff", "time-travel", "snapshot", "history"]
+keywords = ["versioning", "compression", "time-travel", "snapshot", "history"]
 
 [dependencies]
-bincode2 = "2.0.1"
-crc32fast = "1.5.0"
-diffy = { version = "0.5.0", features = ["std"] }
-serde = { version = "1.0.228", features = ["derive"] }
-yazi = "0.2.1"
+bincode-next = { version = "3.1.1", features = ["serde"] }
+crc32fast = "1.5.4"
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+uuid = { version = "1.29.0", features = ["serde", "v7"] }
 
 [dev-dependencies]
+rand = "0.10.3"
 tempfile = "3.27.0"
