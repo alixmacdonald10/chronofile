@@ -3,8 +3,18 @@
 
 ### Chores
 
+- Manual version bump to 0.4.0
+
+### Features
+
+- Removed redundant spec.md
+- Replace diff patches with full snapshots
+
+### Chores
+
 - Refactor
 - Fixed pedantic lints
+- Update CHANGELOG.md for 0.3.1
 
 ### Features
 
